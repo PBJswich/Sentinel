@@ -26,6 +26,33 @@ def _get_all_signals():
             updated=date.today(),
             explanation="A weakening U.S. dollar supports gold prices."
         ),
+        Signal(
+            market="WTI Crude Oil",
+            category="Fundamental",
+            name="Crude Inventories",
+            direction="Bearish",
+            confidence="High",
+            updated=date.today(),
+            explanation="Weekly inventory build exceeds seasonal average, indicating oversupply."
+        ),
+        Signal(
+            market="Copper",
+            category="Sentiment",
+            name="COT Positioning",
+            direction="Neutral",
+            confidence="Medium",
+            updated=date.today(),
+            explanation="Speculative positioning near neutral levels, no extreme positioning detected."
+        ),
+        Signal(
+            market="Brent Crude",
+            category="Technical",
+            name="Moving Average Crossover",
+            direction="Bullish",
+            confidence="Low",
+            updated=date.today(),
+            explanation="20-day MA crossed above 100-day MA, but momentum remains weak."
+        ),
     ]
 
 @router.get("/signals", response_model=list[Signal])
