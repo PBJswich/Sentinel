@@ -65,6 +65,8 @@ def get_signals(
     
     - **market**: Filter by market name (e.g., "WTI Crude Oil", "Gold")
     - **category**: Filter by category (e.g., "Technical", "Macro", "Fundamental", "Sentiment")
+    
+    Returns empty list if no signals match the filters.
     """
     signals = _get_all_signals()
     
@@ -75,3 +77,25 @@ def get_signals(
         signals = [s for s in signals if s.category == category]
     
     return signals
+
+@router.get("/markets")
+def get_markets():
+    """
+    Get list of unique markets that have signals.
+    
+    Returns a list of market names sorted alphabetically.
+    """
+    signals = _get_all_signals()
+    markets = sorted(set(s.market for s in signals))
+    return {"markets": markets}
+
+@router.get("/categories")
+def get_categories():
+    """
+    Get list of unique signal categories.
+    
+    Returns a list of category names sorted alphabetically.
+    """
+    signals = _get_all_signals()
+    categories = sorted(set(s.category for s in signals))
+    return {"categories": categories}
