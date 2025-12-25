@@ -1,6 +1,7 @@
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 from datetime import date
+from typing import List, Optional
 
 class Direction(str, Enum):
     """Allowed values for signal direction."""
@@ -35,3 +36,11 @@ class Signal(BaseModel):
         if len(v.strip()) < 20 and '.' not in v:
             raise ValueError("Explanation should be a clear sentence (1-2 sentences)")
         return v.strip()
+
+class SignalsResponse(BaseModel):
+    """Response model with signals and metadata."""
+    signals: List[Signal]
+    total: int = Field(..., description="Total number of signals available")
+    filtered_count: int = Field(..., description="Number of signals after filtering")
+    limit: Optional[int] = Field(None, description="Pagination limit applied")
+    offset: Optional[int] = Field(None, description="Pagination offset applied")

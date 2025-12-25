@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Optional
-from fastapi import APIRouter
-from .models import Signal, Direction, Confidence
+from fastapi import APIRouter, Query
+from .models import Signal, Direction, Confidence, SignalsResponse
 
 router = APIRouter()
 
@@ -55,28 +55,95 @@ def _get_all_signals():
         ),
     ]
 
-@router.get("/signals", response_model=list[Signal])
+def _filter_signals(signals: list[Signal], market: Optional[str] = None, category: Optional[str] = None) -> list[Signal]:
+    """Filter signals by market and/or category (case-insensitive)."""
+    filtered = signals
+    
+    if market:
+        market_lower = market.lower().strip()
+        filtered = [s for s in filtered if s.market.lower() == market_lower]
+    
+    if category:
+        category_lower = category.lower().strip()
+        filtered = [s for s in filtered if s.category.lower() == category_lower]
+    
+    return filtered
+
+@router.get("/signals", response_model=SignalsResponse)
 def get_signals(
-    market: Optional[str] = None,
-    category: Optional[str] = None
+    market: Optional[str] = Query(None, description="Filter by market name (case-insensitive)"),
+    category: Optional[str] = Query(None, description="Filter by category (case-insensitive)"),
+    limit: Optional[int] = Query(None, ge=1, description="Maximum number of signals to return"),
+    offset: Optional[int] = Query(None, ge=0, description="Number of signals to skip")
 ):
     """
     Get signals with optional filtering by market and/or category.
     
-    - **market**: Filter by market name (e.g., "WTI Crude Oil", "Gold")
-    - **category**: Filter by category (e.g., "Technical", "Macro", "Fundamental", "Sentiment")
+    - **market**: Filter by market name (case-insensitive, e.g., "wti crude oil", "Gold")
+    - **category**: Filter by category (case-insensitive, e.g., "technical", "Macro", "Fundamental", "Sentiment")
+    - **limit**: Maximum number of signals to return (pagination)
+    - **offset**: Number of signals to skip (pagination)
     
-    Returns empty list if no signals match the filters.
+    Returns empty signals list if no signals match the filters.
     """
-    signals = _get_all_signals()
+    all_signals = _get_all_signals()
+    total = len(all_signals)
     
-    if market:
-        signals = [s for s in signals if s.market == market]
+    # Apply filters (case-insensitive)
+    filtered_signals = _filter_signals(all_signals, market, category)
+    filtered_count = len(filtered_signals)
     
-    if category:
-        signals = [s for s in signals if s.category == category]
+    # Apply pagination
+    if offset is not None:
+        filtered_signals = filtered_signals[offset:]
+    if limit is not None:
+        filtered_signals = filtered_signals[:limit]
     
-    return signals
+    return SignalsResponse(
+        signals=filtered_signals,
+        total=total,
+        filtered_count=filtered_count,
+        limit=limit,
+        offset=offset
+    )
+
+@router.get("/signals/{market}", response_model=SignalsResponse)
+def get_signals_by_market(
+    market: str,
+    category: Optional[str] = Query(None, description="Optional category filter (case-insensitive)"),
+    limit: Optional[int] = Query(None, ge=1, description="Maximum number of signals to return"),
+    offset: Optional[int] = Query(None, ge=0, description="Number of signals to skip")
+):
+    """
+    Get signals for a specific market.
+    
+    - **market**: Market name (case-insensitive, e.g., "wti crude oil", "Gold")
+    - **category**: Optional category filter (case-insensitive)
+    - **limit**: Maximum number of signals to return (pagination)
+    - **offset**: Number of signals to skip (pagination)
+    
+    Returns empty signals list if market not found or no signals match.
+    """
+    all_signals = _get_all_signals()
+    total = len(all_signals)
+    
+    # Filter by market (case-insensitive) and optional category
+    filtered_signals = _filter_signals(all_signals, market, category)
+    filtered_count = len(filtered_signals)
+    
+    # Apply pagination
+    if offset is not None:
+        filtered_signals = filtered_signals[offset:]
+    if limit is not None:
+        filtered_signals = filtered_signals[:limit]
+    
+    return SignalsResponse(
+        signals=filtered_signals,
+        total=total,
+        filtered_count=filtered_count,
+        limit=limit,
+        offset=offset
+    )
 
 @router.get("/markets")
 def get_markets():
