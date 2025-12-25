@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Optional
 from fastapi import APIRouter
-from .models import Signal
+from .models import Signal, Direction, Confidence
 
 router = APIRouter()
 
@@ -12,8 +12,8 @@ def _get_all_signals():
             market="WTI Crude Oil",
             category="Technical",
             name="RSI",
-            direction="Bullish",
-            confidence="Medium",
+            direction=Direction.BULLISH,
+            confidence=Confidence.MEDIUM,
             updated=date.today(),
             explanation="Selling pressure appears to be easing."
         ),
@@ -21,8 +21,8 @@ def _get_all_signals():
             market="Gold",
             category="Macro",
             name="USD Trend",
-            direction="Bullish",
-            confidence="High",
+            direction=Direction.BULLISH,
+            confidence=Confidence.HIGH,
             updated=date.today(),
             explanation="A weakening U.S. dollar supports gold prices."
         ),
@@ -30,8 +30,8 @@ def _get_all_signals():
             market="WTI Crude Oil",
             category="Fundamental",
             name="Crude Inventories",
-            direction="Bearish",
-            confidence="High",
+            direction=Direction.BEARISH,
+            confidence=Confidence.HIGH,
             updated=date.today(),
             explanation="Weekly inventory build exceeds seasonal average, indicating oversupply."
         ),
@@ -39,8 +39,8 @@ def _get_all_signals():
             market="Copper",
             category="Sentiment",
             name="COT Positioning",
-            direction="Neutral",
-            confidence="Medium",
+            direction=Direction.NEUTRAL,
+            confidence=Confidence.MEDIUM,
             updated=date.today(),
             explanation="Speculative positioning near neutral levels, no extreme positioning detected."
         ),
@@ -48,8 +48,8 @@ def _get_all_signals():
             market="Brent Crude",
             category="Technical",
             name="Moving Average Crossover",
-            direction="Bullish",
-            confidence="Low",
+            direction=Direction.BULLISH,
+            confidence=Confidence.LOW,
             updated=date.today(),
             explanation="20-day MA crossed above 100-day MA, but momentum remains weak."
         ),
