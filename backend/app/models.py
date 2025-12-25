@@ -21,8 +21,11 @@ class Signal(BaseModel):
     name: str
     direction: Direction
     confidence: Confidence
-    updated: date
+    last_updated: date = Field(..., description="When this signal was last updated/refreshed")
+    data_asof: date = Field(..., description="The date the underlying data is from (may differ from last_updated)")
     explanation: str = Field(..., min_length=10, description="Clear explanation (1-2 sentences)")
+    definition: str = Field(..., description="Definition of what this signal measures")
+    source: str = Field(..., description="Data source (e.g., 'price data', 'inventory report', 'news analysis')")
     
     @field_validator('explanation')
     @classmethod

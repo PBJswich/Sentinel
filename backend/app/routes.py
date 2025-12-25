@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Query
 from .models import Signal, Direction, Confidence, SignalsResponse
@@ -7,6 +7,10 @@ router = APIRouter()
 
 def _get_all_signals():
     """Returns all mocked signals."""
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    last_week = today - timedelta(days=7)
+    
     return [
         Signal(
             market="WTI Crude Oil",
@@ -14,8 +18,11 @@ def _get_all_signals():
             name="RSI",
             direction=Direction.BULLISH,
             confidence=Confidence.MEDIUM,
-            updated=date.today(),
-            explanation="Selling pressure appears to be easing."
+            last_updated=today,
+            data_asof=yesterday,
+            explanation="Selling pressure appears to be easing.",
+            definition="Relative Strength Index (RSI) measures momentum on a scale of 0-100, indicating overbought (>70) or oversold (<30) conditions.",
+            source="price data"
         ),
         Signal(
             market="Gold",
@@ -23,8 +30,11 @@ def _get_all_signals():
             name="USD Trend",
             direction=Direction.BULLISH,
             confidence=Confidence.HIGH,
-            updated=date.today(),
-            explanation="A weakening U.S. dollar supports gold prices."
+            last_updated=today,
+            data_asof=yesterday,
+            explanation="A weakening U.S. dollar supports gold prices.",
+            definition="U.S. Dollar Index (DXY) trend analysis comparing 20-day moving average to 100-day moving average to assess dollar strength.",
+            source="price data"
         ),
         Signal(
             market="WTI Crude Oil",
@@ -32,8 +42,11 @@ def _get_all_signals():
             name="Crude Inventories",
             direction=Direction.BEARISH,
             confidence=Confidence.HIGH,
-            updated=date.today(),
-            explanation="Weekly inventory build exceeds seasonal average, indicating oversupply."
+            last_updated=today,
+            data_asof=last_week,
+            explanation="Weekly inventory build exceeds seasonal average, indicating oversupply.",
+            definition="Weekly change in U.S. crude oil inventories compared to 5-year seasonal average, indicating supply/demand balance.",
+            source="inventory report"
         ),
         Signal(
             market="Copper",
@@ -41,8 +54,11 @@ def _get_all_signals():
             name="COT Positioning",
             direction=Direction.NEUTRAL,
             confidence=Confidence.MEDIUM,
-            updated=date.today(),
-            explanation="Speculative positioning near neutral levels, no extreme positioning detected."
+            last_updated=today,
+            data_asof=last_week,
+            explanation="Speculative positioning near neutral levels, no extreme positioning detected.",
+            definition="Commitments of Traders (COT) report showing net speculative position as percentile of historical range.",
+            source="positioning data"
         ),
         Signal(
             market="Brent Crude",
@@ -50,8 +66,11 @@ def _get_all_signals():
             name="Moving Average Crossover",
             direction=Direction.BULLISH,
             confidence=Confidence.LOW,
-            updated=date.today(),
-            explanation="20-day MA crossed above 100-day MA, but momentum remains weak."
+            last_updated=today,
+            data_asof=yesterday,
+            explanation="20-day MA crossed above 100-day MA, but momentum remains weak.",
+            definition="Trend signal generated when short-term moving average (20-day) crosses above or below long-term moving average (100-day).",
+            source="price data"
         ),
     ]
 
@@ -166,3 +185,96 @@ def get_categories():
     signals = _get_all_signals()
     categories = sorted(set(s.category for s in signals))
     return {"categories": categories}
+
+@router.get("/signals/explain")
+def explain_signals(
+    market: Optional[str] = Query(None, description="Filter by market name (case-insensitive)"),
+    category: Optional[str] = Query(None, description="Filter by category (case-insensitive)")
+):
+    """
+    Get human-readable summaries of signals with explainability information.
+    Provides aggregated summaries showing:
+    - Signal definitions and sources
+    - Data freshness (last_updated vs data_asof)
+    - Market and category breakdowns
+    - **market**: Filter by market name (case-insensitive)
+    - **category**: Filter by category (case-insensitive)
+    """
+    all_signals = _get_all_signals()
+    filtered_signals = _filter_signals(all_signals, market, category)
+    
+    if not filtered_signals:
+        return {
+            "summary": "No signals found matching the specified filters.",
+            "signals": []
+        }
+    
+    # Group by market
+    by_market = {}
+    for signal in filtered_signals:
+        if signal.market not in by_market:
+            by_market[signal.market] = []
+        by_market[signal.market].append(signal)
+    
+    # Group by category
+    by_category = {}
+    for signal in filtered_signals:
+        if signal.category not in by_category:
+            by_category[signal.category] = []
+        by_category[signal.category].append(signal)
+    
+    # Build summaries
+    market_summaries = []
+    for market_name, signals in by_market.items():
+        bullish = sum(1 for s in signals if s.direction == Direction.BULLISH)
+        bearish = sum(1 for s in signals if s.direction == Direction.BEARISH)
+        neutral = sum(1 for s in signals if s.direction == Direction.NEUTRAL)
+        high_conf = sum(1 for s in signals if s.confidence == Confidence.HIGH)
+        
+        market_summaries.append({
+            "market": market_name,
+            "total_signals": len(signals),
+            "direction_breakdown": {
+                "bullish": bullish,
+                "bearish": bearish,
+                "neutral": neutral
+            },
+            "high_confidence_count": high_conf,
+            "signals": [
+                {
+                    "name": s.name,
+                    "category": s.category,
+                    "direction": s.direction.value,
+                    "confidence": s.confidence.value,
+                    "definition": s.definition,
+                    "source": s.source,
+                    "explanation": s.explanation,
+                    "data_freshness": {
+                        "last_updated": str(s.last_updated),
+                        "data_asof": str(s.data_asof),
+                        "days_old": (s.last_updated - s.data_asof).days
+                    }
+                }
+                for s in signals
+            ]
+        })
+    
+    category_summaries = {}
+    for category_name, signals in by_category.items():
+        category_summaries[category_name] = {
+            "count": len(signals),
+            "sources": sorted(set(s.source for s in signals)),
+            "signals": [s.name for s in signals]
+        }
+    
+    return {
+        "summary": f"Found {len(filtered_signals)} signal(s) across {len(by_market)} market(s) and {len(by_category)} category/categories.",
+        "total_signals": len(filtered_signals),
+        "markets": market_summaries,
+        "categories": category_summaries,
+        "data_freshness_summary": {
+            "most_recent_update": str(max(s.last_updated for s in filtered_signals)),
+            "oldest_data": str(min(s.data_asof for s in filtered_signals)),
+            "signals_with_stale_data": sum(1 for s in filtered_signals if (s.last_updated - s.data_asof).days > 1)
+        }
+    }
