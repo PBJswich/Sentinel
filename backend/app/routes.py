@@ -124,21 +124,32 @@ def get_categories():
 @router.get("/registry")
 def get_signal_registry():
     """
-    Get the signal registry with all registered signal IDs and metadata.
+    Get the signal registry with all registered signal IDs, metadata, relationships, and market groups.
     
-    Returns the internal signal registry showing stable identifiers, versions,
-    and basic metadata for all available signals.
+    Returns the internal signal registry showing:
+    - Stable identifiers, versions, and metadata for all signals
+    - Signal relationships (which signals relate to which)
+    - Market groupings (energy, metals, ags)
     """
-    from .registry import get_registry, list_all_signal_ids
+    from .registry import (
+        get_registry, 
+        list_all_signal_ids,
+        get_signal_relationships,
+        get_market_groups
+    )
     
     registry = get_registry()
     signal_ids = list_all_signal_ids()
+    relationships = get_signal_relationships()
+    market_groups = get_market_groups()
     
     return {
         "registry_version": "v1",
         "total_signals": len(signal_ids),
         "signal_ids": signal_ids,
-        "signals": registry
+        "signals": registry,
+        "relationships": relationships,
+        "market_groups": market_groups
     }
 
 @router.get("/signals/explain")

@@ -10,6 +10,12 @@
     "explanation": "Selling pressure appears to be easing.",
     "definition": "Relative Strength Index (RSI) measures momentum on a scale of 0-100, indicating overbought (>70) or oversold (<30) conditions.",
     "source": "price data",
+    "key_driver": "Momentum indicator showing oversold conditions are reversing, suggesting potential short-term bounce.",
+    "validity_window": "daily",
+    "decay_behavior": "RSI signals typically remain valid for 1-3 days. Momentum can reverse quickly, so this signal should be monitored daily.",
+    "related_signal_ids": ["brent-ma-crossover-technical"],
+    "related_markets": ["Brent Crude"],
+    "signal_type": "tactical",
     "data_asof_offset_days": 1
   },
   {
@@ -23,6 +29,12 @@
     "explanation": "A weakening U.S. dollar supports gold prices.",
     "definition": "U.S. Dollar Index (DXY) trend analysis comparing 20-day moving average to 100-day moving average to assess dollar strength.",
     "source": "price data",
+    "key_driver": "USD weakness is a primary driver for gold prices. Inverse relationship means weaker dollar supports higher gold prices.",
+    "validity_window": "weekly",
+    "decay_behavior": "USD trends typically persist for weeks to months. This signal remains relevant until USD trend reverses or consolidates.",
+    "related_signal_ids": [],
+    "related_markets": ["Silver", "Platinum"],
+    "signal_type": "structural",
     "data_asof_offset_days": 1
   },
   {
@@ -36,6 +48,12 @@
     "explanation": "Weekly inventory build exceeds seasonal average, indicating oversupply.",
     "definition": "Weekly change in U.S. crude oil inventories compared to 5-year seasonal average, indicating supply/demand balance.",
     "source": "inventory report",
+    "key_driver": "Inventory builds above seasonal norms indicate supply exceeding demand, creating downward price pressure.",
+    "validity_window": "weekly",
+    "decay_behavior": "Inventory data impacts prices for 1-2 weeks until next report. Signal relevance decreases as next report approaches.",
+    "related_signal_ids": [],
+    "related_markets": ["Brent Crude", "Heating Oil", "RBOB"],
+    "signal_type": "structural",
     "data_asof_offset_days": 7
   },
   {
@@ -49,6 +67,12 @@
     "explanation": "Speculative positioning near neutral levels, no extreme positioning detected.",
     "definition": "Commitments of Traders (COT) report showing net speculative position as percentile of historical range.",
     "source": "positioning data",
+    "key_driver": "Neutral positioning suggests no extreme sentiment, reducing risk of sharp reversals from crowded trades.",
+    "validity_window": "weekly",
+    "decay_behavior": "COT positioning signals are most relevant for 1-2 weeks. Extreme positioning can persist longer, but moderate positioning changes more frequently.",
+    "related_signal_ids": [],
+    "related_markets": ["Aluminum", "Zinc"],
+    "signal_type": "tactical",
     "data_asof_offset_days": 7
   },
   {
@@ -62,6 +86,12 @@
     "explanation": "20-day MA crossed above 100-day MA, but momentum remains weak.",
     "definition": "Trend signal generated when short-term moving average (20-day) crosses above or below long-term moving average (100-day).",
     "source": "price data",
+    "key_driver": "Bullish crossover suggests potential trend change, but weak momentum indicates caution is warranted.",
+    "validity_window": "daily",
+    "decay_behavior": "MA crossovers can reverse quickly. Signal remains valid for 2-5 days typically, but should be confirmed with other indicators.",
+    "related_signal_ids": ["wti-rsi-technical"],
+    "related_markets": ["WTI Crude Oil"],
+    "signal_type": "tactical",
     "data_asof_offset_days": 1
   }
 ]

@@ -21,6 +21,18 @@ class DataFreshness(str, Enum):
     STALE = "stale"
     UNKNOWN = "unknown"
 
+class ValidityWindow(str, Enum):
+    """Expected signal lifespan."""
+    INTRADAY = "intraday"
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    STRUCTURAL = "structural"
+
+class SignalType(str, Enum):
+    """Signal type classification."""
+    STRUCTURAL = "structural"
+    TACTICAL = "tactical"
+
 class Signal(BaseModel):
     signal_id: str = Field(..., description="Stable unique identifier for this signal")
     version: str = Field(default="v1", description="Signal version (e.g., v1, v2)")
@@ -34,6 +46,12 @@ class Signal(BaseModel):
     explanation: str = Field(..., min_length=10, description="Clear explanation (1-2 sentences)")
     definition: str = Field(..., description="Definition of what this signal measures")
     source: str = Field(..., description="Data source (e.g., 'price data', 'inventory report', 'news analysis')")
+    key_driver: str = Field(..., description="Rationale/why this signal matters (key driver)")
+    validity_window: ValidityWindow = Field(..., description="Expected signal lifespan")
+    decay_behavior: str = Field(..., description="Description of how signal loses relevance over time")
+    related_signal_ids: List[str] = Field(default_factory=list, description="List of related signal IDs")
+    related_markets: List[str] = Field(default_factory=list, description="List of markets this signal impacts")
+    signal_type: SignalType = Field(..., description="Signal type: structural or tactical")
     
     @field_validator('explanation')
     @classmethod

@@ -10,7 +10,7 @@ import os
 from datetime import date, timedelta
 from pathlib import Path
 from typing import List, Optional
-from .models import Signal, Direction, Confidence
+from .models import Signal, Direction, Confidence, ValidityWindow, SignalType
 from .registry import get_registry
 
 # Cache for loaded signals and file modification time
@@ -49,6 +49,8 @@ def _load_signals_from_file() -> List[Signal]:
         # Get direction and confidence enums
         direction = Direction[signal_data["direction"].upper()]
         confidence = Confidence[signal_data["confidence"].upper()]
+        validity_window = ValidityWindow[signal_data.get("validity_window", registry_entry.get("validity_window", "daily")).upper()]
+        signal_type = SignalType[signal_data.get("signal_type", registry_entry.get("signal_type", "tactical")).upper()]
         
         signal = Signal(
             signal_id=signal_data["signal_id"],
@@ -62,7 +64,13 @@ def _load_signals_from_file() -> List[Signal]:
             data_asof=data_asof,
             explanation=signal_data["explanation"],
             definition=signal_data["definition"],
-            source=signal_data["source"]
+            source=signal_data["source"],
+            key_driver=signal_data.get("key_driver", registry_entry.get("key_driver", "")),
+            validity_window=validity_window,
+            decay_behavior=signal_data.get("decay_behavior", registry_entry.get("decay_behavior", "")),
+            related_signal_ids=signal_data.get("related_signal_ids", registry_entry.get("related_signal_ids", [])),
+            related_markets=signal_data.get("related_markets", registry_entry.get("related_markets", [])),
+            signal_type=signal_type
         )
         signals.append(signal)
     
