@@ -95,3 +95,30 @@ class SignalsResponse(BaseModel):
     filtered_count: int = Field(..., description="Number of signals after filtering")
     limit: Optional[int] = Field(None, description="Pagination limit applied")
     offset: Optional[int] = Field(None, description="Pagination offset applied")
+
+class RelationshipType(str, Enum):
+    """Types of signal relationships."""
+    CONFIRMS = "confirms"
+    CONTRADICTS = "contradicts"
+    RELATED = "related"
+
+class SignalRelationship(BaseModel):
+    """Relationship between signals."""
+    signal_id: str = Field(..., description="Signal ID this relationship refers to")
+    relationship_type: RelationshipType = Field(..., description="Type of relationship")
+    description: Optional[str] = Field(None, description="Optional description of the relationship")
+
+class ConflictType(str, Enum):
+    """Types of signal conflicts."""
+    OPPOSITE_DIRECTION = "opposite_direction"
+    STRUCTURAL_TACTICAL_MISMATCH = "structural_tactical_mismatch"
+    TIMEFRAME_MISMATCH = "timeframe_mismatch"
+
+class Conflict(BaseModel):
+    """Conflict between signals."""
+    conflicting_signals: List[str] = Field(..., description="List of signal IDs in conflict")
+    conflict_type: ConflictType = Field(..., description="Type of conflict")
+    description: str = Field(..., description="Human-readable description of the conflict")
+    market: Optional[str] = Field(None, description="Market where conflict occurs (if applicable)")
+    timeframe_mismatch: Optional[str] = Field(None, description="Description of timeframe mismatch if applicable")
+    structural_vs_transient: Optional[str] = Field(None, description="Description of structural vs transient tension if applicable")

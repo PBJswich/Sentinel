@@ -1,7 +1,9 @@
-from typing import Optional
-from fastapi import APIRouter, Query
-from .models import Signal, Direction, Confidence, SignalsResponse
+from typing import Optional, List
+from fastapi import APIRouter, Query, HTTPException
+from .models import Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType, Conflict
 from .signal_loader import get_all_signals, reload_signals
+from .conflict_detector import get_all_conflicts, get_conflicts_for_market
+from .registry import get_signal_relationships
 
 router = APIRouter()
 
@@ -163,6 +165,8 @@ def explain_signals(
     - Signal definitions and sources
     - Data freshness (last_updated vs data_asof)
     - Market and category breakdowns
+    - Signal relationships
+    - Conflicts
     - **market**: Filter by market name (case-insensitive)
     - **category**: Filter by category (case-insensitive)
     """
@@ -174,6 +178,15 @@ def explain_signals(
             "summary": "No signals found matching the specified filters.",
             "signals": []
         }
+    
+    # Get conflicts for filtered signals
+    conflicts = get_all_conflicts(filtered_signals)
+    conflicts_by_market = {}
+    for conflict in conflicts:
+        if conflict.market:
+            if conflict.market not in conflicts_by_market:
+                conflicts_by_market[conflict.market] = []
+            conflicts_by_market[conflict.market].append(conflict)
     
     # Group by market
     by_market = {}
@@ -197,6 +210,19 @@ def explain_signals(
         neutral = sum(1 for s in signals if s.direction == Direction.NEUTRAL)
         high_conf = sum(1 for s in signals if s.confidence == Confidence.HIGH)
         
+        # Get relationships for signals in this market
+        market_relationships = []
+        for s in signals:
+            if s.related_signal_ids:
+                market_relationships.append({
+                    "signal_id": s.signal_id,
+                    "signal_name": s.name,
+                    "related_signals": s.related_signal_ids
+                })
+        
+        # Get conflicts for this market
+        market_conflicts = [c.model_dump() for c in conflicts_by_market.get(market_name, [])]
+        
         market_summaries.append({
             "market": market_name,
             "total_signals": len(signals),
@@ -206,6 +232,9 @@ def explain_signals(
                 "neutral": neutral
             },
             "high_confidence_count": high_conf,
+            "conflicts": market_conflicts,
+            "conflict_count": len(market_conflicts),
+            "relationships": market_relationships,
             "signals": [
                 {
                     "name": s.name,
@@ -215,8 +244,13 @@ def explain_signals(
                     "definition": s.definition,
                     "source": s.source,
                     "explanation": s.explanation,
+                    "key_driver": s.key_driver,
                     "signal_id": s.signal_id,
                     "version": s.version,
+                    "validity_window": s.validity_window.value,
+                    "signal_type": s.signal_type.value,
+                    "related_signal_ids": s.related_signal_ids,
+                    "related_markets": s.related_markets,
                     "data_freshness": {
                         "status": s.data_freshness.value,
                         "last_updated": str(s.last_updated),
@@ -239,6 +273,7 @@ def explain_signals(
     return {
         "summary": f"Found {len(filtered_signals)} signal(s) across {len(by_market)} market(s) and {len(by_category)} category/categories.",
         "total_signals": len(filtered_signals),
+        "total_conflicts": len(conflicts),
         "markets": market_summaries,
         "categories": category_summaries,
         "data_freshness_summary": {
@@ -248,6 +283,81 @@ def explain_signals(
             "stale_count": sum(1 for s in filtered_signals if s.data_freshness.value == "stale"),
             "unknown_count": sum(1 for s in filtered_signals if s.data_freshness.value == "unknown")
         }
+    }
+
+@router.get("/signals/{signal_id}/relationships")
+def get_signal_relationships_endpoint(signal_id: str):
+    """
+    Get relationships for a specific signal.
+    
+    Returns all signals related to the specified signal, including relationship types.
+    """
+    all_signals = _get_all_signals()
+    signal_map = {s.signal_id: s for s in all_signals}
+    
+    if signal_id not in signal_map:
+        raise HTTPException(status_code=404, detail=f"Signal {signal_id} not found")
+    
+    signal = signal_map[signal_id]
+    relationships = []
+    
+    # Get relationships from registry
+    registry_relationships = get_signal_relationships()
+    signal_rels = registry_relationships.get(signal_id, [])
+    
+    # Also check related_signal_ids from signal itself
+    for related_id in signal.related_signal_ids:
+        if related_id in signal_map:
+            relationships.append(SignalRelationship(
+                signal_id=related_id,
+                relationship_type=RelationshipType.RELATED,
+                description=f"Related signal: {signal_map[related_id].name}"
+            ))
+    
+    # Add registry relationships
+    for rel in signal_rels:
+        related_id = rel.get("signal_id")
+        rel_type = rel.get("relationship_type", "related")
+        if related_id in signal_map:
+            try:
+                relationship_type = RelationshipType[rel_type.upper()]
+            except KeyError:
+                relationship_type = RelationshipType.RELATED
+            
+            relationships.append(SignalRelationship(
+                signal_id=related_id,
+                relationship_type=relationship_type,
+                description=rel.get("description")
+            ))
+    
+    return {
+        "signal_id": signal_id,
+        "signal_name": signal.name,
+        "relationships": relationships
+    }
+
+@router.get("/signals/conflicts")
+def get_conflicts_endpoint(
+    market: Optional[str] = Query(None, description="Filter conflicts by market (case-insensitive)")
+):
+    """
+    Get all detected conflicts between signals.
+    
+    Conflicts are detected based on rules:
+    - Same market, opposite directions, high confidence
+    - Structural vs tactical mismatch
+    - Timeframe mismatch (intraday/daily vs structural)
+    
+    - **market**: Optional filter to get conflicts for a specific market
+    """
+    if market:
+        conflicts = get_conflicts_for_market(market)
+    else:
+        conflicts = get_all_conflicts()
+    
+    return {
+        "total_conflicts": len(conflicts),
+        "conflicts": [conflict.model_dump() for conflict in conflicts]
     }
 
 @router.post("/signals/reload")
