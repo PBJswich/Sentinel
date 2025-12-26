@@ -1,90 +1,13 @@
-from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Query
 from .models import Signal, Direction, Confidence, SignalsResponse
-from .registry import get_registry
+from .signal_loader import get_all_signals, reload_signals
 
 router = APIRouter()
 
 def _get_all_signals():
-    """Returns all mocked signals using registry for IDs and versions."""
-    today = date.today()
-    yesterday = today - timedelta(days=1)
-    last_week = today - timedelta(days=7)
-    registry = get_registry()
-    
-    return [
-        Signal(
-            signal_id=registry["wti-rsi-technical"]["signal_id"],
-            version=registry["wti-rsi-technical"]["version"],
-            market="WTI Crude Oil",
-            category="Technical",
-            name="RSI",
-            direction=Direction.BULLISH,
-            confidence=Confidence.MEDIUM,
-            last_updated=today,
-            data_asof=yesterday,
-            explanation="Selling pressure appears to be easing.",
-            definition="Relative Strength Index (RSI) measures momentum on a scale of 0-100, indicating overbought (>70) or oversold (<30) conditions.",
-            source="price data"
-        ),
-        Signal(
-            signal_id=registry["gold-usd-trend-macro"]["signal_id"],
-            version=registry["gold-usd-trend-macro"]["version"],
-            market="Gold",
-            category="Macro",
-            name="USD Trend",
-            direction=Direction.BULLISH,
-            confidence=Confidence.HIGH,
-            last_updated=today,
-            data_asof=yesterday,
-            explanation="A weakening U.S. dollar supports gold prices.",
-            definition="U.S. Dollar Index (DXY) trend analysis comparing 20-day moving average to 100-day moving average to assess dollar strength.",
-            source="price data"
-        ),
-        Signal(
-            signal_id=registry["wti-inventories-fundamental"]["signal_id"],
-            version=registry["wti-inventories-fundamental"]["version"],
-            market="WTI Crude Oil",
-            category="Fundamental",
-            name="Crude Inventories",
-            direction=Direction.BEARISH,
-            confidence=Confidence.HIGH,
-            last_updated=today,
-            data_asof=last_week,
-            explanation="Weekly inventory build exceeds seasonal average, indicating oversupply.",
-            definition="Weekly change in U.S. crude oil inventories compared to 5-year seasonal average, indicating supply/demand balance.",
-            source="inventory report"
-        ),
-        Signal(
-            signal_id=registry["copper-cot-sentiment"]["signal_id"],
-            version=registry["copper-cot-sentiment"]["version"],
-            market="Copper",
-            category="Sentiment",
-            name="COT Positioning",
-            direction=Direction.NEUTRAL,
-            confidence=Confidence.MEDIUM,
-            last_updated=today,
-            data_asof=last_week,
-            explanation="Speculative positioning near neutral levels, no extreme positioning detected.",
-            definition="Commitments of Traders (COT) report showing net speculative position as percentile of historical range.",
-            source="positioning data"
-        ),
-        Signal(
-            signal_id=registry["brent-ma-crossover-technical"]["signal_id"],
-            version=registry["brent-ma-crossover-technical"]["version"],
-            market="Brent Crude",
-            category="Technical",
-            name="Moving Average Crossover",
-            direction=Direction.BULLISH,
-            confidence=Confidence.LOW,
-            last_updated=today,
-            data_asof=yesterday,
-            explanation="20-day MA crossed above 100-day MA, but momentum remains weak.",
-            definition="Trend signal generated when short-term moving average (20-day) crosses above or below long-term moving average (100-day).",
-            source="price data"
-        ),
-    ]
+    """Returns all signals loaded from JSON file with hot-reload support."""
+    return get_all_signals()
 
 def _filter_signals(signals: list[Signal], market: Optional[str] = None, category: Optional[str] = None) -> list[Signal]:
     """Filter signals by market and/or category (case-insensitive)."""
@@ -314,4 +237,20 @@ def explain_signals(
             "stale_count": sum(1 for s in filtered_signals if s.data_freshness.value == "stale"),
             "unknown_count": sum(1 for s in filtered_signals if s.data_freshness.value == "unknown")
         }
+    }
+
+@router.post("/signals/reload")
+def reload_signals_endpoint():
+    """
+    Force reload signals from JSON file.
+    
+    Useful for local development to reload signals after editing the JSON file
+    without restarting the server. Hot-reload also happens automatically when
+    the file modification time changes.
+    """
+    reloaded = reload_signals()
+    return {
+        "message": "Signals reloaded successfully",
+        "count": len(reloaded),
+        "signals": [s.signal_id for s in reloaded]
     }

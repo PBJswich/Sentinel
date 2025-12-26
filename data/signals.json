@@ -1,0 +1,68 @@
+[
+  {
+    "signal_id": "wti-rsi-technical",
+    "version": "v1",
+    "market": "WTI Crude Oil",
+    "category": "Technical",
+    "name": "RSI",
+    "direction": "Bullish",
+    "confidence": "Medium",
+    "explanation": "Selling pressure appears to be easing.",
+    "definition": "Relative Strength Index (RSI) measures momentum on a scale of 0-100, indicating overbought (>70) or oversold (<30) conditions.",
+    "source": "price data",
+    "data_asof_offset_days": 1
+  },
+  {
+    "signal_id": "gold-usd-trend-macro",
+    "version": "v1",
+    "market": "Gold",
+    "category": "Macro",
+    "name": "USD Trend",
+    "direction": "Bullish",
+    "confidence": "High",
+    "explanation": "A weakening U.S. dollar supports gold prices.",
+    "definition": "U.S. Dollar Index (DXY) trend analysis comparing 20-day moving average to 100-day moving average to assess dollar strength.",
+    "source": "price data",
+    "data_asof_offset_days": 1
+  },
+  {
+    "signal_id": "wti-inventories-fundamental",
+    "version": "v1",
+    "market": "WTI Crude Oil",
+    "category": "Fundamental",
+    "name": "Crude Inventories",
+    "direction": "Bearish",
+    "confidence": "High",
+    "explanation": "Weekly inventory build exceeds seasonal average, indicating oversupply.",
+    "definition": "Weekly change in U.S. crude oil inventories compared to 5-year seasonal average, indicating supply/demand balance.",
+    "source": "inventory report",
+    "data_asof_offset_days": 7
+  },
+  {
+    "signal_id": "copper-cot-sentiment",
+    "version": "v1",
+    "market": "Copper",
+    "category": "Sentiment",
+    "name": "COT Positioning",
+    "direction": "Neutral",
+    "confidence": "Medium",
+    "explanation": "Speculative positioning near neutral levels, no extreme positioning detected.",
+    "definition": "Commitments of Traders (COT) report showing net speculative position as percentile of historical range.",
+    "source": "positioning data",
+    "data_asof_offset_days": 7
+  },
+  {
+    "signal_id": "brent-ma-crossover-technical",
+    "version": "v1",
+    "market": "Brent Crude",
+    "category": "Technical",
+    "name": "Moving Average Crossover",
+    "direction": "Bullish",
+    "confidence": "Low",
+    "explanation": "20-day MA crossed above 100-day MA, but momentum remains weak.",
+    "definition": "Trend signal generated when short-term moving average (20-day) crosses above or below long-term moving average (100-day).",
+    "source": "price data",
+    "data_asof_offset_days": 1
+  }
+]
+
