@@ -1,6 +1,6 @@
 from enum import Enum
-from pydantic import BaseModel, Field, field_validator
-from datetime import date
+from pydantic import BaseModel, Field, field_validator, computed_field
+from datetime import date, timedelta
 from typing import List, Optional
 
 class Direction(str, Enum):
@@ -15,7 +15,15 @@ class Confidence(str, Enum):
     MEDIUM = "Medium"
     HIGH = "High"
 
+class DataFreshness(str, Enum):
+    """Data freshness status flags."""
+    FRESH = "fresh"
+    STALE = "stale"
+    UNKNOWN = "unknown"
+
 class Signal(BaseModel):
+    signal_id: str = Field(..., description="Stable unique identifier for this signal")
+    version: str = Field(default="v1", description="Signal version (e.g., v1, v2)")
     market: str
     category: str
     name: str
@@ -39,6 +47,28 @@ class Signal(BaseModel):
         if len(v.strip()) < 20 and '.' not in v:
             raise ValueError("Explanation should be a clear sentence (1-2 sentences)")
         return v.strip()
+    
+    @computed_field
+    @property
+    def data_freshness(self) -> DataFreshness:
+        """
+        Calculate data freshness based on data_asof date.
+        - fresh: data is less than 2 days old
+        - stale: data is 2+ days old
+        - unknown: if dates are invalid or missing
+        """
+        try:
+            today = date.today()
+            days_old = (today - self.data_asof).days
+            
+            if days_old < 0:
+                return DataFreshness.UNKNOWN
+            elif days_old < 2:
+                return DataFreshness.FRESH
+            else:
+                return DataFreshness.STALE
+        except (ValueError, TypeError):
+            return DataFreshness.UNKNOWN
 
 class SignalsResponse(BaseModel):
     """Response model with signals and metadata."""

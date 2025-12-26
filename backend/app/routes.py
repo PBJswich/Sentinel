@@ -2,17 +2,21 @@ from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Query
 from .models import Signal, Direction, Confidence, SignalsResponse
+from .registry import get_registry
 
 router = APIRouter()
 
 def _get_all_signals():
-    """Returns all mocked signals."""
+    """Returns all mocked signals using registry for IDs and versions."""
     today = date.today()
     yesterday = today - timedelta(days=1)
     last_week = today - timedelta(days=7)
+    registry = get_registry()
     
     return [
         Signal(
+            signal_id=registry["wti-rsi-technical"]["signal_id"],
+            version=registry["wti-rsi-technical"]["version"],
             market="WTI Crude Oil",
             category="Technical",
             name="RSI",
@@ -25,6 +29,8 @@ def _get_all_signals():
             source="price data"
         ),
         Signal(
+            signal_id=registry["gold-usd-trend-macro"]["signal_id"],
+            version=registry["gold-usd-trend-macro"]["version"],
             market="Gold",
             category="Macro",
             name="USD Trend",
@@ -37,6 +43,8 @@ def _get_all_signals():
             source="price data"
         ),
         Signal(
+            signal_id=registry["wti-inventories-fundamental"]["signal_id"],
+            version=registry["wti-inventories-fundamental"]["version"],
             market="WTI Crude Oil",
             category="Fundamental",
             name="Crude Inventories",
@@ -49,6 +57,8 @@ def _get_all_signals():
             source="inventory report"
         ),
         Signal(
+            signal_id=registry["copper-cot-sentiment"]["signal_id"],
+            version=registry["copper-cot-sentiment"]["version"],
             market="Copper",
             category="Sentiment",
             name="COT Positioning",
@@ -61,6 +71,8 @@ def _get_all_signals():
             source="positioning data"
         ),
         Signal(
+            signal_id=registry["brent-ma-crossover-technical"]["signal_id"],
+            version=registry["brent-ma-crossover-technical"]["version"],
             market="Brent Crude",
             category="Technical",
             name="Moving Average Crossover",
@@ -186,6 +198,26 @@ def get_categories():
     categories = sorted(set(s.category for s in signals))
     return {"categories": categories}
 
+@router.get("/registry")
+def get_signal_registry():
+    """
+    Get the signal registry with all registered signal IDs and metadata.
+    
+    Returns the internal signal registry showing stable identifiers, versions,
+    and basic metadata for all available signals.
+    """
+    from .registry import get_registry, list_all_signal_ids
+    
+    registry = get_registry()
+    signal_ids = list_all_signal_ids()
+    
+    return {
+        "registry_version": "v1",
+        "total_signals": len(signal_ids),
+        "signal_ids": signal_ids,
+        "signals": registry
+    }
+
 @router.get("/signals/explain")
 def explain_signals(
     market: Optional[str] = Query(None, description="Filter by market name (case-insensitive)"),
@@ -249,7 +281,10 @@ def explain_signals(
                     "definition": s.definition,
                     "source": s.source,
                     "explanation": s.explanation,
+                    "signal_id": s.signal_id,
+                    "version": s.version,
                     "data_freshness": {
+                        "status": s.data_freshness.value,
                         "last_updated": str(s.last_updated),
                         "data_asof": str(s.data_asof),
                         "days_old": (s.last_updated - s.data_asof).days
@@ -275,6 +310,8 @@ def explain_signals(
         "data_freshness_summary": {
             "most_recent_update": str(max(s.last_updated for s in filtered_signals)),
             "oldest_data": str(min(s.data_asof for s in filtered_signals)),
-            "signals_with_stale_data": sum(1 for s in filtered_signals if (s.last_updated - s.data_asof).days > 1)
+            "fresh_count": sum(1 for s in filtered_signals if s.data_freshness.value == "fresh"),
+            "stale_count": sum(1 for s in filtered_signals if s.data_freshness.value == "stale"),
+            "unknown_count": sum(1 for s in filtered_signals if s.data_freshness.value == "unknown")
         }
     }
