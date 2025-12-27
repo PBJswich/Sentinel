@@ -1,11 +1,22 @@
-from typing import Optional, List
+from typing import Optional, List, Dict
+from datetime import date
 from fastapi import APIRouter, Query, HTTPException
-from .models import Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType, Conflict
+from .models import Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType, Conflict, SignalSnapshot
 from .signal_loader import get_all_signals, reload_signals
 from .conflict_detector import get_all_conflicts, get_conflicts_for_market
 from .registry import get_signal_relationships
+from .snapshot_storage import (
+    create_daily_snapshot,
+    get_signal_history,
+    get_signals_at_date,
+    get_changes_since,
+    initialize_snapshots
+)
 
 router = APIRouter()
+
+# Initialize snapshots on module load
+initialize_snapshots()
 
 def _get_all_signals():
     """Returns all signals loaded from JSON file with hot-reload support."""
@@ -24,6 +35,21 @@ def _filter_signals(signals: list[Signal], market: Optional[str] = None, categor
         filtered = [s for s in filtered if s.category.lower() == category_lower]
     
     return filtered
+
+def _get_stale_warnings(signals: list[Signal]) -> Optional[List[Dict]]:
+    """Get stale signal warnings for a list of signals."""
+    warnings = []
+    for signal in signals:
+        if signal.is_stale:
+            warnings.append({
+                "signal_id": signal.signal_id,
+                "signal_name": signal.name,
+                "market": signal.market,
+                "age_days": signal.age_days,
+                "validity_window": signal.validity_window.value,
+                "warning": f"Signal is {signal.age_days} days old, exceeding {signal.validity_window.value} validity window"
+            })
+    return warnings if warnings else None
 
 @router.get("/signals", response_model=SignalsResponse)
 def get_signals(
@@ -55,12 +81,15 @@ def get_signals(
     if limit is not None:
         filtered_signals = filtered_signals[:limit]
     
+    stale_warnings = _get_stale_warnings(filtered_signals)
+    
     return SignalsResponse(
         signals=filtered_signals,
         total=total,
         filtered_count=filtered_count,
         limit=limit,
-        offset=offset
+        offset=offset,
+        stale_warnings=stale_warnings
     )
 
 @router.get("/signals/{market}", response_model=SignalsResponse)
@@ -93,12 +122,15 @@ def get_signals_by_market(
     if limit is not None:
         filtered_signals = filtered_signals[:limit]
     
+    stale_warnings = _get_stale_warnings(filtered_signals)
+    
     return SignalsResponse(
         signals=filtered_signals,
         total=total,
         filtered_count=filtered_count,
         limit=limit,
-        offset=offset
+        offset=offset,
+        stale_warnings=stale_warnings
     )
 
 @router.get("/markets")
@@ -251,6 +283,8 @@ def explain_signals(
                     "signal_type": s.signal_type.value,
                     "related_signal_ids": s.related_signal_ids,
                     "related_markets": s.related_markets,
+                    "age_days": s.age_days,
+                    "is_stale": s.is_stale,
                     "data_freshness": {
                         "status": s.data_freshness.value,
                         "last_updated": str(s.last_updated),
@@ -282,6 +316,10 @@ def explain_signals(
             "fresh_count": sum(1 for s in filtered_signals if s.data_freshness.value == "fresh"),
             "stale_count": sum(1 for s in filtered_signals if s.data_freshness.value == "stale"),
             "unknown_count": sum(1 for s in filtered_signals if s.data_freshness.value == "unknown")
+        },
+        "staleness_summary": {
+            "stale_signals_count": sum(1 for s in filtered_signals if s.is_stale),
+            "stale_warnings": _get_stale_warnings(filtered_signals) or []
         }
     }
 
@@ -358,6 +396,113 @@ def get_conflicts_endpoint(
     return {
         "total_conflicts": len(conflicts),
         "conflicts": [conflict.model_dump() for conflict in conflicts]
+    }
+
+@router.get("/signals/{signal_id}/history")
+def get_signal_history_endpoint(
+    signal_id: str,
+    start_date: Optional[date] = Query(None, description="Start date for history (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="End date for history (YYYY-MM-DD)")
+):
+    """
+    Get historical snapshots for a specific signal.
+    
+    Returns all snapshots of the signal over time, allowing you to see
+    what the signal said on previous dates.
+    
+    - **signal_id**: Signal ID to get history for
+    - **start_date**: Optional start date filter
+    - **end_date**: Optional end date filter
+    """
+    all_signals = _get_all_signals()
+    signal_ids = {s.signal_id for s in all_signals}
+    
+    if signal_id not in signal_ids:
+        raise HTTPException(status_code=404, detail=f"Signal {signal_id} not found")
+    
+    snapshots = get_signal_history(signal_id, start_date, end_date)
+    
+    return {
+        "signal_id": signal_id,
+        "total_snapshots": len(snapshots),
+        "snapshots": [
+            {
+                "snapshot_date": str(s.snapshot_date),
+                "signal": s.signal.model_dump()
+            }
+            for s in snapshots
+        ]
+    }
+
+@router.get("/signals/history")
+def get_signals_at_date_endpoint(
+    date: date = Query(..., description="Date to query (YYYY-MM-DD)")
+):
+    """
+    Get all signals as they were at a specific date (point-in-time view).
+    
+    Returns signals as they existed on the specified date, allowing you to
+    see "what did the signals say yesterday?" or any historical date.
+    
+    - **date**: Date to query (YYYY-MM-DD)
+    """
+    signals = get_signals_at_date(date)
+    
+    return {
+        "date": str(date),
+        "total_signals": len(signals),
+        "signals": [s.model_dump() for s in signals]
+    }
+
+@router.get("/signals/changes")
+def get_changes_since_endpoint(
+    since: date = Query(..., description="Date to compare against (YYYY-MM-DD)")
+):
+    """
+    Get all signal changes since a specific date.
+    
+    Shows what changed since the specified date:
+    - New signals
+    - Changed direction
+    - Changed confidence
+    - Removed signals
+    
+    - **since**: Date to compare against (YYYY-MM-DD)
+    """
+    changes = get_changes_since(since)
+    
+    total_changes = (
+        len(changes["new_signals"]) +
+        len(changes["changed_direction"]) +
+        len(changes["changed_confidence"]) +
+        len(changes["removed_signals"])
+    )
+    
+    return {
+        "since_date": str(since),
+        "total_changes": total_changes,
+        "changes": changes
+    }
+
+@router.post("/signals/snapshot")
+def create_snapshot_endpoint(
+    snapshot_date: Optional[date] = Query(None, description="Date for snapshot (defaults to today)")
+):
+    """
+    Manually create a snapshot of all current signals.
+    
+    Useful for testing or creating snapshots at specific times.
+    Daily snapshots are created automatically, but this allows manual creation.
+    
+    - **snapshot_date**: Optional date for snapshot (defaults to today)
+    """
+    snapshots = create_daily_snapshot(snapshot_date)
+    
+    return {
+        "message": "Snapshot created successfully",
+        "snapshot_date": str(snapshot_date or date.today()),
+        "count": len(snapshots),
+        "signal_ids": [s.signal_id for s in snapshots]
     }
 
 @router.post("/signals/reload")

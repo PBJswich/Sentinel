@@ -1,7 +1,7 @@
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator, computed_field
 from datetime import date, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 class Direction(str, Enum):
     """Allowed values for signal direction."""
@@ -87,6 +87,44 @@ class Signal(BaseModel):
                 return DataFreshness.STALE
         except (ValueError, TypeError):
             return DataFreshness.UNKNOWN
+    
+    @computed_field
+    @property
+    def age_days(self) -> int:
+        """
+        Calculate signal age in days based on last_updated date.
+        Returns number of days since signal was last updated.
+        """
+        try:
+            today = date.today()
+            return (today - self.last_updated).days
+        except (ValueError, TypeError):
+            return 0
+    
+    @computed_field
+    @property
+    def is_stale(self) -> bool:
+        """
+        Determine if signal is stale based on validity_window and age.
+        
+        Staleness thresholds:
+        - intraday: > 1 day old
+        - daily: > 2 days old
+        - weekly: > 8 days old
+        - structural: > 30 days old
+        """
+        age = self.age_days
+        
+        if self.validity_window == ValidityWindow.INTRADAY:
+            return age > 1
+        elif self.validity_window == ValidityWindow.DAILY:
+            return age > 2
+        elif self.validity_window == ValidityWindow.WEEKLY:
+            return age > 8
+        elif self.validity_window == ValidityWindow.STRUCTURAL:
+            return age > 30
+        else:
+            return age > 7  # Default threshold
 
 class SignalsResponse(BaseModel):
     """Response model with signals and metadata."""
@@ -95,6 +133,7 @@ class SignalsResponse(BaseModel):
     filtered_count: int = Field(..., description="Number of signals after filtering")
     limit: Optional[int] = Field(None, description="Pagination limit applied")
     offset: Optional[int] = Field(None, description="Pagination offset applied")
+    stale_warnings: Optional[List[Dict]] = Field(None, description="Warnings for stale signals")
 
 class RelationshipType(str, Enum):
     """Types of signal relationships."""
@@ -122,3 +161,9 @@ class Conflict(BaseModel):
     market: Optional[str] = Field(None, description="Market where conflict occurs (if applicable)")
     timeframe_mismatch: Optional[str] = Field(None, description="Description of timeframe mismatch if applicable")
     structural_vs_transient: Optional[str] = Field(None, description="Description of structural vs transient tension if applicable")
+
+class SignalSnapshot(BaseModel):
+    """Historical snapshot of a signal at a point in time."""
+    signal_id: str = Field(..., description="Signal ID")
+    snapshot_date: date = Field(..., description="Date of this snapshot")
+    signal: Signal = Field(..., description="Full signal data at this point in time")
