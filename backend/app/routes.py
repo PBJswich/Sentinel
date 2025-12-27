@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict
 from datetime import date, timedelta
 from fastapi import APIRouter, Query, HTTPException
-from .models import Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType, Conflict, SignalSnapshot, Regime
+from .models import Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType, Conflict, SignalSnapshot, Regime, Event, EventType
 from .signal_loader import get_all_signals, reload_signals
 from .conflict_detector import get_all_conflicts, get_conflicts_for_market
 from .registry import get_signal_relationships
@@ -17,6 +17,16 @@ from .snapshot_storage import (
     detect_regime_transition
 )
 from .regime_detector import detect_regime, get_regime_impact_on_market
+from .event_registry import (
+    register_event,
+    get_event,
+    get_all_events,
+    get_events_by_date,
+    get_upcoming_events,
+    get_events_by_type,
+    get_events_for_market,
+    link_event_to_signal
+)
 
 router = APIRouter()
 
@@ -542,7 +552,17 @@ def explain_signals(
                         "last_updated": str(s.last_updated),
                         "data_asof": str(s.data_asof),
                         "days_old": (s.last_updated - s.data_asof).days
-                    }
+                    },
+                    "related_events": [
+                        {
+                            "event_id": e.event_id,
+                            "event_name": e.name,
+                            "event_date": str(e.date),
+                            "event_type": e.event_type.value
+                        }
+                        for e in get_all_events()
+                        if s.signal_id in e.related_signal_ids
+                    ]
                 }
                 for s in signals
             ]
@@ -937,6 +957,225 @@ def get_regime_history_endpoint(
     return {
         "total_regimes": len(regimes),
         "regimes": [r.model_dump() for r in regimes]
+    }
+
+@router.get("/daily/brief")
+def get_daily_brief():
+    """
+    Get daily market brief summarizing key changes and intelligence.
+    
+    Provides:
+    - Total signals across all markets
+    - New signals since yesterday
+    - Changed signals (direction/confidence changes)
+    - Emerging conflicts
+    - Regime shifts
+    - Key confirmations (signals aligning)
+    - Human-readable narrative
+    """
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    
+    all_signals = _get_all_signals()
+    total_signals = len(all_signals)
+    total_markets = len(set(s.market for s in all_signals))
+    
+    # Get changes since yesterday
+    changes = get_changes_since(yesterday)
+    new_signals = changes["new_signals"]
+    changed_direction = changes["changed_direction"]
+    changed_confidence = changes["changed_confidence"]
+    
+    # Get emerging conflicts (conflicts detected today)
+    all_conflicts = get_all_conflicts()
+    # For now, we'll consider all current conflicts as "emerging" if they involve changed signals
+    changed_signal_ids = {c["signal_id"] for c in changed_direction + changed_confidence}
+    emerging_conflicts = [
+        c for c in all_conflicts
+        if any(sid in changed_signal_ids for sid in c.conflicting_signals)
+    ]
+    
+    # Check for regime shift
+    current_regime = detect_regime()
+    previous_regime = get_regime_at_date(yesterday)
+    regime_transition = detect_regime_transition(current_regime, previous_regime)
+    
+    # Detect confirmations (signals aligning in same direction)
+    confirmations = []
+    by_market = {}
+    for signal in all_signals:
+        if signal.market not in by_market:
+            by_market[signal.market] = []
+        by_market[signal.market].append(signal)
+    
+    for market, signals in by_market.items():
+        if len(signals) >= 2:
+            directions = [s.direction for s in signals]
+            if all(d == Direction.BULLISH for d in directions):
+                confirmations.append({
+                    "market": market,
+                    "type": "bullish_alignment",
+                    "count": len(signals),
+                    "description": f"All {len(signals)} signals in {market} are bullish"
+                })
+            elif all(d == Direction.BEARISH for d in directions):
+                confirmations.append({
+                    "market": market,
+                    "type": "bearish_alignment",
+                    "count": len(signals),
+                    "description": f"All {len(signals)} signals in {market} are bearish"
+                })
+    
+    # Generate narrative
+    narrative_parts = []
+    narrative_parts.append(f"Daily brief for {today}: {total_signals} signal(s) across {total_markets} market(s).")
+    
+    if new_signals:
+        narrative_parts.append(f"🆕 {len(new_signals)} new signal(s) detected.")
+    
+    if changed_direction:
+        narrative_parts.append(f"🔄 {len(changed_direction)} signal(s) changed direction.")
+    
+    if changed_confidence:
+        narrative_parts.append(f"📊 {len(changed_confidence)} signal(s) changed confidence.")
+    
+    if emerging_conflicts:
+        narrative_parts.append(f"⚠️ {len(emerging_conflicts)} emerging conflict(s) detected.")
+    
+    if regime_transition:
+        narrative_parts.append(f"🌍 Regime shift: {regime_transition['description']}")
+    
+    if confirmations:
+        narrative_parts.append(f"✅ {len(confirmations)} market(s) showing signal alignment.")
+    
+    narrative = " ".join(narrative_parts)
+    
+    return {
+        "date": str(today),
+        "total_signals": total_signals,
+        "total_markets": total_markets,
+        "new_signals": new_signals,
+        "new_signals_count": len(new_signals),
+        "changed_direction": changed_direction,
+        "changed_direction_count": len(changed_direction),
+        "changed_confidence": changed_confidence,
+        "changed_confidence_count": len(changed_confidence),
+        "emerging_conflicts": [c.model_dump() for c in emerging_conflicts],
+        "emerging_conflicts_count": len(emerging_conflicts),
+        "regime_transition": regime_transition,
+        "current_regime": current_regime.model_dump(),
+        "confirmations": confirmations,
+        "confirmations_count": len(confirmations),
+        "narrative": narrative
+    }
+
+@router.get("/events")
+def get_events(
+    event_type: Optional[str] = Query(None, description="Filter by event type (cpi, nfp, fed_decision, etc.)"),
+    market: Optional[str] = Query(None, description="Filter by impacted market"),
+    upcoming_days: Optional[int] = Query(None, ge=1, description="Get upcoming events within N days")
+):
+    """
+    Get all registered events.
+    
+    - **event_type**: Optional filter by event type (case-insensitive)
+    - **market**: Optional filter by impacted market
+    - **upcoming_days**: Optional filter for upcoming events within N days
+    """
+    events = get_all_events()
+    
+    if event_type:
+        try:
+            event_type_enum = EventType[event_type.upper()]
+            events = [e for e in events if e.event_type == event_type_enum]
+        except KeyError:
+            events = []
+    
+    if market:
+        events = [e for e in events if market in e.impact_markets]
+    
+    if upcoming_days:
+        upcoming = get_upcoming_events(upcoming_days)
+        if event_type or market:
+            # Re-apply filters
+            if event_type:
+                try:
+                    event_type_enum = EventType[event_type.upper()]
+                    upcoming = [e for e in upcoming if e.event_type == event_type_enum]
+                except KeyError:
+                    upcoming = []
+            if market:
+                upcoming = [e for e in upcoming if market in e.impact_markets]
+        events = upcoming
+    
+    return {
+        "total_events": len(events),
+        "events": [e.model_dump() for e in events]
+    }
+
+@router.get("/events/{event_id}")
+def get_event_endpoint(event_id: str):
+    """
+    Get a specific event by ID.
+    
+    - **event_id**: Event ID
+    """
+    event = get_event(event_id)
+    
+    if not event:
+        raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+    
+    return {
+        "event": event.model_dump()
+    }
+
+@router.get("/events/{event_id}/impact")
+def get_event_impact(event_id: str):
+    """
+    Get impact analysis for a specific event.
+    
+    Shows:
+    - Event details
+    - Related signals
+    - Impacted markets
+    - Signal changes around event date
+    
+    - **event_id**: Event ID
+    """
+    event = get_event(event_id)
+    
+    if not event:
+        raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+    
+    # Get related signals
+    all_signals = _get_all_signals()
+    related_signals = [s for s in all_signals if s.signal_id in event.related_signal_ids]
+    
+    # Get signals for impacted markets
+    impacted_market_signals = [s for s in all_signals if s.market in event.impact_markets]
+    
+    # Get changes around event date (within 3 days)
+    event_date = event.event_date
+    changes_before = get_changes_since(event_date - timedelta(days=3))
+    changes_after = get_changes_since(event_date)
+    
+    return {
+        "event": event.model_dump(),
+        "related_signals": [s.model_dump() for s in related_signals],
+        "related_signals_count": len(related_signals),
+        "impacted_markets": event.impact_markets,
+        "impacted_market_signals": [s.model_dump() for s in impacted_market_signals],
+        "impacted_market_signals_count": len(impacted_market_signals),
+        "changes_around_event": {
+            "before_event": {
+                "date_range": f"{event_date - timedelta(days=3)} to {event_date}",
+                "changes": changes_before
+            },
+            "after_event": {
+                "date_range": f"{event_date} to {date.today()}",
+                "changes": changes_after
+            }
+        }
     }
 
 @router.post("/signals/reload")

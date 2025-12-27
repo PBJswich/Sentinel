@@ -184,3 +184,21 @@ class Regime(BaseModel):
     impact: Dict[str, str] = Field(..., description="Expected impact on commodities by market group")
     detected_date: date = Field(..., description="Date this regime was detected")
     confidence: str = Field(..., description="Confidence level in regime classification (High/Medium/Low)")
+
+class EventType(str, Enum):
+    """Types of macro events."""
+    CPI = "cpi"
+    NFP = "nfp"
+    FED_DECISION = "fed_decision"
+    INVENTORY_REPORT = "inventory_report"
+    OTHER = "other"
+
+class Event(BaseModel):
+    """Macro event that impacts markets."""
+    event_id: str = Field(..., description="Unique identifier for the event")
+    event_type: EventType = Field(..., description="Type of event")
+    name: str = Field(..., description="Event name (e.g., 'CPI Release', 'NFP Report')")
+    event_date: date = Field(..., description="Date of the event")
+    description: str = Field(..., description="Description of the event")
+    impact_markets: List[str] = Field(default_factory=list, description="Markets impacted by this event")
+    related_signal_ids: List[str] = Field(default_factory=list, description="Signal IDs related to this event")
