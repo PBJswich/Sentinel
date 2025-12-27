@@ -167,3 +167,20 @@ class SignalSnapshot(BaseModel):
     signal_id: str = Field(..., description="Signal ID")
     snapshot_date: date = Field(..., description="Date of this snapshot")
     signal: Signal = Field(..., description="Full signal data at this point in time")
+
+class RegimeType(str, Enum):
+    """Types of macro regimes."""
+    INFLATIONARY_GROWTH = "inflationary_growth"
+    RISK_OFF = "risk_off"
+    TIGHTENING = "tightening"
+    DISINFLATIONARY_GROWTH = "disinflationary_growth"
+    UNCERTAIN = "uncertain"
+
+class Regime(BaseModel):
+    """Macro regime classification."""
+    regime_type: RegimeType = Field(..., description="Type of regime")
+    description: str = Field(..., description="Human-readable description of the regime")
+    indicators: Dict[str, str] = Field(..., description="Key indicators that led to this classification")
+    impact: Dict[str, str] = Field(..., description="Expected impact on commodities by market group")
+    detected_date: date = Field(..., description="Date this regime was detected")
+    confidence: str = Field(..., description="Confidence level in regime classification (High/Medium/Low)")

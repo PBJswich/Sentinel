@@ -6,11 +6,14 @@ Stores historical snapshots of signals for point-in-time queries and change trac
 
 from datetime import date, timedelta
 from typing import Dict, List, Optional
-from .models import Signal, SignalSnapshot
+from .models import Signal, SignalSnapshot, Regime
 from .signal_loader import get_all_signals
 
 # In-memory storage: maps (signal_id, date) -> SignalSnapshot
 _snapshots: Dict[tuple[str, date], SignalSnapshot] = {}
+
+# Regime history: maps date -> Regime
+_regime_history: Dict[date, Regime] = {}
 
 def create_daily_snapshot(snapshot_date: Optional[date] = None) -> List[SignalSnapshot]:
     """
@@ -160,6 +163,85 @@ def get_changes_since(since_date: date) -> Dict[str, List[Dict]]:
             })
     
     return changes
+
+def save_regime(regime: Regime, regime_date: Optional[date] = None):
+    """
+    Save a regime snapshot to history.
+    
+    Args:
+        regime: The regime to save
+        regime_date: Date for the regime (defaults to detected_date)
+    """
+    if regime_date is None:
+        regime_date = regime.detected_date
+    _regime_history[regime_date] = regime
+
+def get_regime_history(start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[Regime]:
+    """
+    Get regime history within a date range.
+    
+    Args:
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+        
+    Returns:
+        List of regimes sorted by date (oldest first)
+    """
+    regimes = []
+    
+    for regime_date, regime in _regime_history.items():
+        if start_date and regime_date < start_date:
+            continue
+        if end_date and regime_date > end_date:
+            continue
+        regimes.append(regime)
+    
+    return sorted(regimes, key=lambda r: r.detected_date)
+
+def get_regime_at_date(target_date: date) -> Optional[Regime]:
+    """
+    Get regime as it was at a specific date.
+    
+    Args:
+        target_date: Date to query
+        
+    Returns:
+        Regime at that date, or None if not found
+    """
+    # Get latest regime on or before target_date
+    matching_regimes = [(d, r) for d, r in _regime_history.items() if d <= target_date]
+    
+    if not matching_regimes:
+        return None
+    
+    # Return the most recent one
+    latest_date, latest_regime = max(matching_regimes, key=lambda x: x[0])
+    return latest_regime
+
+def detect_regime_transition(current_regime: Regime, previous_regime: Optional[Regime]) -> Optional[Dict]:
+    """
+    Detect if there was a regime transition.
+    
+    Args:
+        current_regime: Current regime
+        previous_regime: Previous regime (if available)
+        
+    Returns:
+        Transition information if transition detected, None otherwise
+    """
+    if previous_regime is None:
+        return None
+    
+    if current_regime.regime_type != previous_regime.regime_type:
+        return {
+            "transition_detected": True,
+            "from_regime": previous_regime.regime_type.value,
+            "to_regime": current_regime.regime_type.value,
+            "transition_date": current_regime.detected_date,
+            "description": f"Regime transition from {previous_regime.regime_type.value} to {current_regime.regime_type.value}"
+        }
+    
+    return None
 
 def initialize_snapshots():
     """Initialize with today's snapshot if none exist."""

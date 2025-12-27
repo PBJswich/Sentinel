@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict
-from datetime import date
+from datetime import date, timedelta
 from fastapi import APIRouter, Query, HTTPException
-from .models import Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType, Conflict, SignalSnapshot
+from .models import Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType, Conflict, SignalSnapshot, Regime
 from .signal_loader import get_all_signals, reload_signals
 from .conflict_detector import get_all_conflicts, get_conflicts_for_market
 from .registry import get_signal_relationships
@@ -10,8 +10,13 @@ from .snapshot_storage import (
     get_signal_history,
     get_signals_at_date,
     get_changes_since,
-    initialize_snapshots
+    initialize_snapshots,
+    save_regime,
+    get_regime_history,
+    get_regime_at_date,
+    detect_regime_transition
 )
+from .regime_detector import detect_regime, get_regime_impact_on_market
 
 router = APIRouter()
 
@@ -269,6 +274,12 @@ def get_market_summary(market: str):
             market_group = group_name
             break
     
+    # Get current regime and its impact on this market
+    current_regime = detect_regime()
+    regime_impact = None
+    if market_group:
+        regime_impact = get_regime_impact_on_market(current_regime, market_group)
+    
     return {
         "market": market,
         "market_group": market_group,
@@ -290,6 +301,11 @@ def get_market_summary(market: str):
         ],
         "conflicts": [c.model_dump() for c in market_conflicts],
         "conflict_count": len(market_conflicts),
+        "regime": {
+            "current_regime": current_regime.regime_type.value,
+            "regime_description": current_regime.description,
+            "regime_impact": regime_impact
+        },
         "narrative": narrative,
         "signals": [
             {
@@ -739,6 +755,188 @@ def create_snapshot_endpoint(
         "snapshot_date": str(snapshot_date or date.today()),
         "count": len(snapshots),
         "signal_ids": [s.signal_id for s in snapshots]
+    }
+
+@router.get("/portfolio/summary")
+def get_portfolio_summary():
+    """
+    Get portfolio-level summary aggregating signals across all markets.
+    
+    Provides:
+    - Aggregation by pillar (macro/fundamental/sentiment/technical)
+    - Aggregation by market group (energy/metals/ags)
+    - Identification of systemic forces (USD, rates, growth) from macro signals
+    - Human-readable portfolio narrative
+    """
+    all_signals = _get_all_signals()
+    from .registry import get_market_groups
+    
+    # Aggregate by pillar
+    by_pillar = {}
+    for signal in all_signals:
+        pillar = signal.category
+        if pillar not in by_pillar:
+            by_pillar[pillar] = []
+        by_pillar[pillar].append(signal)
+    
+    pillar_summaries = {}
+    for pillar, signals in by_pillar.items():
+        direction_counts = {
+            "bullish": sum(1 for s in signals if s.direction == Direction.BULLISH),
+            "bearish": sum(1 for s in signals if s.direction == Direction.BEARISH),
+            "neutral": sum(1 for s in signals if s.direction == Direction.NEUTRAL)
+        }
+        
+        # Determine dominant direction
+        dominant_direction = max(direction_counts.items(), key=lambda x: x[1])[0] if signals else "neutral"
+        
+        # Calculate average confidence (1=Low, 2=Medium, 3=High)
+        confidence_values = {
+            Confidence.LOW: 1,
+            Confidence.MEDIUM: 2,
+            Confidence.HIGH: 3
+        }
+        avg_confidence_num = sum(confidence_values.get(s.confidence, 1) for s in signals) / len(signals) if signals else 0
+        avg_confidence = "High" if avg_confidence_num >= 2.5 else ("Medium" if avg_confidence_num >= 1.5 else "Low")
+        
+        pillar_summaries[pillar] = {
+            "count": len(signals),
+            "dominant_direction": dominant_direction,
+            "direction_breakdown": direction_counts,
+            "average_confidence": avg_confidence
+        }
+    
+    # Aggregate by market group
+    market_groups = get_market_groups()
+    by_group = {}
+    for group_name, markets in market_groups.items():
+        group_signals = [s for s in all_signals if s.market in markets]
+        if group_signals:
+            direction_counts = {
+                "bullish": sum(1 for s in group_signals if s.direction == Direction.BULLISH),
+                "bearish": sum(1 for s in group_signals if s.direction == Direction.BEARISH),
+                "neutral": sum(1 for s in group_signals if s.direction == Direction.NEUTRAL)
+            }
+            by_group[group_name] = {
+                "count": len(group_signals),
+                "markets": markets,
+                "direction_breakdown": direction_counts
+            }
+    
+    # Identify systemic forces from macro signals
+    macro_signals = by_pillar.get("Macro", [])
+    systemic_forces = {}
+    
+    usd_signals = [s for s in macro_signals if "USD" in s.name or "DXY" in s.name]
+    if usd_signals:
+        usd_directions = [s.direction for s in usd_signals]
+        if Direction.BULLISH in usd_directions:
+            systemic_forces["USD"] = "Strong (bullish signals)"
+        elif Direction.BEARISH in usd_directions:
+            systemic_forces["USD"] = "Weak (bearish signals)"
+        else:
+            systemic_forces["USD"] = "Mixed"
+    
+    rates_signals = [s for s in macro_signals if "rate" in s.name.lower() or "yield" in s.name.lower() or "10Y" in s.name]
+    if rates_signals:
+        rates_directions = [s.direction for s in rates_signals]
+        if Direction.BULLISH in rates_directions:
+            systemic_forces["Rates"] = "Rising (bullish signals)"
+        elif Direction.BEARISH in rates_directions:
+            systemic_forces["Rates"] = "Falling (bearish signals)"
+        else:
+            systemic_forces["Rates"] = "Stable"
+    
+    growth_signals = [s for s in macro_signals if "growth" in s.name.lower() or "copper" in s.name.lower() or "equity" in s.name.lower()]
+    if growth_signals:
+        growth_directions = [s.direction for s in growth_signals]
+        if Direction.BULLISH in growth_directions:
+            systemic_forces["Growth"] = "Strong (bullish signals)"
+        elif Direction.BEARISH in growth_directions:
+            systemic_forces["Growth"] = "Weak (bearish signals)"
+        else:
+            systemic_forces["Growth"] = "Mixed"
+    
+    # Generate portfolio narrative
+    narrative_parts = []
+    narrative_parts.append(f"Portfolio overview: {len(all_signals)} total signal(s) across {len(set(s.market for s in all_signals))} market(s).")
+    
+    # Pillar summary
+    pillar_list = ", ".join([f"{pillar} ({summary['count']} signals, {summary['dominant_direction']})" for pillar, summary in pillar_summaries.items()])
+    narrative_parts.append(f"Signals by pillar: {pillar_list}.")
+    
+    # Market group summary
+    if by_group:
+        group_list = ", ".join([f"{group} ({summary['count']} signals)" for group, summary in by_group.items()])
+        narrative_parts.append(f"Signals by market group: {group_list}.")
+    
+    # Systemic forces
+    if systemic_forces:
+        forces_list = ", ".join([f"{force}: {status}" for force, status in systemic_forces.items()])
+        narrative_parts.append(f"Systemic forces: {forces_list}.")
+    
+    narrative = " ".join(narrative_parts)
+    
+    return {
+        "total_signals": len(all_signals),
+        "total_markets": len(set(s.market for s in all_signals)),
+        "by_pillar": pillar_summaries,
+        "by_market_group": by_group,
+        "systemic_forces": systemic_forces,
+        "narrative": narrative
+    }
+
+@router.get("/regime/current")
+def get_current_regime():
+    """
+    Get the current detected macro regime.
+    
+    Classifies the macro environment based on signal patterns:
+    - Inflationary growth: USD weak, rates rising, growth strong
+    - Risk-off: USD strong, rates falling, growth weak
+    - Tightening: USD strong, rates rising, growth mixed
+    - Disinflationary growth: USD mixed, rates stable, growth strong
+    """
+    current_regime = detect_regime()
+    
+    # Save to history if not already saved today
+    from datetime import date
+    today = date.today()
+    existing_regime = get_regime_at_date(today)
+    if existing_regime is None or existing_regime.regime_type != current_regime.regime_type:
+        save_regime(current_regime, today)
+    
+    # Check for transition
+    yesterday = date.today() - timedelta(days=1)
+    previous_regime = get_regime_at_date(yesterday)
+    transition = detect_regime_transition(current_regime, previous_regime)
+    
+    response = {
+        "regime": current_regime.model_dump(),
+        "transition": transition
+    }
+    
+    return response
+
+@router.get("/regime/history")
+def get_regime_history_endpoint(
+    start_date: Optional[date] = Query(None, description="Start date for history (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="End date for history (YYYY-MM-DD)")
+):
+    """
+    Get historical regime classifications.
+    
+    Returns regime history within the specified date range, allowing you to
+    see how regimes have changed over time.
+    
+    - **start_date**: Optional start date filter
+    - **end_date**: Optional end date filter
+    """
+    regimes = get_regime_history(start_date, end_date)
+    
+    return {
+        "total_regimes": len(regimes),
+        "regimes": [r.model_dump() for r in regimes]
     }
 
 @router.post("/signals/reload")
