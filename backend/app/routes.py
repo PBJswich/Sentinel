@@ -136,13 +136,249 @@ def get_signals_by_market(
 @router.get("/markets")
 def get_markets():
     """
-    Get list of unique markets that have signals.
+    Get list of unique markets that have signals, including their group information.
     
-    Returns a list of market names sorted alphabetically.
+    Returns a list of markets with their group assignments.
     """
+    from .registry import get_market_groups
+    
     signals = _get_all_signals()
-    markets = sorted(set(s.market for s in signals))
-    return {"markets": markets}
+    markets_set = set(s.market for s in signals)
+    market_groups = get_market_groups()
+    
+    # Build reverse mapping: market -> groups
+    market_to_groups = {}
+    for group_name, markets in market_groups.items():
+        for market in markets:
+            if market in markets_set:
+                if market not in market_to_groups:
+                    market_to_groups[market] = []
+                market_to_groups[market].append(group_name)
+    
+    # Build response with group info
+    markets_list = []
+    for market in sorted(markets_set):
+        markets_list.append({
+            "market": market,
+            "groups": sorted(market_to_groups.get(market, []))
+        })
+    
+    return {
+        "markets": markets_list,
+        "total_markets": len(markets_set)
+    }
+
+@router.get("/markets/{market}/summary")
+def get_market_summary(market: str):
+    """
+    Get comprehensive summary for a specific market.
+    
+    Provides aggregated analysis including:
+    - Signal counts by direction, confidence, and pillar
+    - Dominant forces (highest confidence signals)
+    - Conflicts for the market
+    - Confidence distribution
+    - Human-readable market narrative
+    
+    - **market**: Market name (case-insensitive)
+    """
+    all_signals = _get_all_signals()
+    market_signals = [s for s in all_signals if s.market.lower() == market.lower()]
+    
+    if not market_signals:
+        raise HTTPException(status_code=404, detail=f"Market '{market}' not found or has no signals")
+    
+    # Count by direction
+    direction_counts = {
+        "bullish": sum(1 for s in market_signals if s.direction == Direction.BULLISH),
+        "bearish": sum(1 for s in market_signals if s.direction == Direction.BEARISH),
+        "neutral": sum(1 for s in market_signals if s.direction == Direction.NEUTRAL)
+    }
+    
+    # Count by confidence
+    confidence_counts = {
+        "high": sum(1 for s in market_signals if s.confidence == Confidence.HIGH),
+        "medium": sum(1 for s in market_signals if s.confidence == Confidence.MEDIUM),
+        "low": sum(1 for s in market_signals if s.confidence == Confidence.LOW)
+    }
+    
+    # Count by pillar (category)
+    pillar_counts = {}
+    for signal in market_signals:
+        pillar = signal.category
+        pillar_counts[pillar] = pillar_counts.get(pillar, 0) + 1
+    
+    # Identify dominant forces (highest confidence signals)
+    dominant_forces = sorted(
+        market_signals,
+        key=lambda s: (
+            3 if s.confidence == Confidence.HIGH else (2 if s.confidence == Confidence.MEDIUM else 1),
+            s.direction.value
+        ),
+        reverse=True
+    )[:5]  # Top 5
+    
+    # Get conflicts for this market
+    market_conflicts = get_conflicts_for_market(market)
+    
+    # Calculate confidence distribution
+    total_signals = len(market_signals)
+    confidence_distribution = {
+        "high_pct": round((confidence_counts["high"] / total_signals * 100) if total_signals > 0 else 0, 1),
+        "medium_pct": round((confidence_counts["medium"] / total_signals * 100) if total_signals > 0 else 0, 1),
+        "low_pct": round((confidence_counts["low"] / total_signals * 100) if total_signals > 0 else 0, 1)
+    }
+    
+    # Generate human-readable narrative
+    narrative_parts = []
+    narrative_parts.append(f"{market} has {total_signals} active signal(s).")
+    
+    # Direction summary
+    if direction_counts["bullish"] > direction_counts["bearish"]:
+        narrative_parts.append(f"Signals are predominantly bullish ({direction_counts['bullish']} bullish vs {direction_counts['bearish']} bearish).")
+    elif direction_counts["bearish"] > direction_counts["bullish"]:
+        narrative_parts.append(f"Signals are predominantly bearish ({direction_counts['bearish']} bearish vs {direction_counts['bullish']} bullish).")
+    else:
+        narrative_parts.append(f"Signals are mixed ({direction_counts['bullish']} bullish, {direction_counts['bearish']} bearish, {direction_counts['neutral']} neutral).")
+    
+    # Confidence summary
+    if confidence_counts["high"] > 0:
+        narrative_parts.append(f"{confidence_counts['high']} high-confidence signal(s) provide strong directional bias.")
+    
+    # Pillar summary
+    pillar_list = ", ".join([f"{count} {pillar}" for pillar, count in sorted(pillar_counts.items())])
+    narrative_parts.append(f"Signals span {len(pillar_counts)} pillar(s): {pillar_list}.")
+    
+    # Conflicts
+    if market_conflicts:
+        narrative_parts.append(f"⚠️ {len(market_conflicts)} conflict(s) detected - contradictory forces are present.")
+    
+    # Stale signals
+    stale_count = sum(1 for s in market_signals if s.is_stale)
+    if stale_count > 0:
+        narrative_parts.append(f"⚠️ {stale_count} signal(s) are stale and may need updating.")
+    
+    narrative = " ".join(narrative_parts)
+    
+    # Get market group
+    from .registry import get_market_groups
+    market_groups = get_market_groups()
+    market_group = None
+    for group_name, markets in market_groups.items():
+        if market in markets:
+            market_group = group_name
+            break
+    
+    return {
+        "market": market,
+        "market_group": market_group,
+        "total_signals": total_signals,
+        "direction_breakdown": direction_counts,
+        "confidence_breakdown": confidence_counts,
+        "pillar_breakdown": pillar_counts,
+        "confidence_distribution": confidence_distribution,
+        "dominant_forces": [
+            {
+                "signal_id": s.signal_id,
+                "signal_name": s.name,
+                "category": s.category,
+                "direction": s.direction.value,
+                "confidence": s.confidence.value,
+                "explanation": s.explanation
+            }
+            for s in dominant_forces
+        ],
+        "conflicts": [c.model_dump() for c in market_conflicts],
+        "conflict_count": len(market_conflicts),
+        "narrative": narrative,
+        "signals": [
+            {
+                "signal_id": s.signal_id,
+                "name": s.name,
+                "category": s.category,
+                "direction": s.direction.value,
+                "confidence": s.confidence.value,
+                "is_stale": s.is_stale,
+                "age_days": s.age_days
+            }
+            for s in market_signals
+        ]
+    }
+
+@router.get("/markets/groups/{group}")
+def get_market_group_summary(group: str):
+    """
+    Get summary for a market group (energy, metals, ags).
+    
+    Aggregates signals across all markets in the group and provides:
+    - Total signals across group
+    - Direction breakdown across group
+    - Markets in the group with signal counts
+    - Group-level conflicts
+    
+    - **group**: Market group name (energy, metals, ags) - case-insensitive
+    """
+    from .registry import get_markets_by_group
+    
+    markets_in_group = get_markets_by_group(group.lower())
+    
+    if not markets_in_group:
+        raise HTTPException(status_code=404, detail=f"Market group '{group}' not found")
+    
+    all_signals = _get_all_signals()
+    group_signals = [s for s in all_signals if s.market in markets_in_group]
+    
+    # Count by direction across group
+    direction_counts = {
+        "bullish": sum(1 for s in group_signals if s.direction == Direction.BULLISH),
+        "bearish": sum(1 for s in group_signals if s.direction == Direction.BEARISH),
+        "neutral": sum(1 for s in group_signals if s.direction == Direction.NEUTRAL)
+    }
+    
+    # Count by confidence
+    confidence_counts = {
+        "high": sum(1 for s in group_signals if s.confidence == Confidence.HIGH),
+        "medium": sum(1 for s in group_signals if s.confidence == Confidence.MEDIUM),
+        "low": sum(1 for s in group_signals if s.confidence == Confidence.LOW)
+    }
+    
+    # Count by pillar
+    pillar_counts = {}
+    for signal in group_signals:
+        pillar = signal.category
+        pillar_counts[pillar] = pillar_counts.get(pillar, 0) + 1
+    
+    # Get signals per market
+    signals_by_market = {}
+    for market in markets_in_group:
+        market_sigs = [s for s in group_signals if s.market == market]
+        signals_by_market[market] = {
+            "total_signals": len(market_sigs),
+            "direction_breakdown": {
+                "bullish": sum(1 for s in market_sigs if s.direction == Direction.BULLISH),
+                "bearish": sum(1 for s in market_sigs if s.direction == Direction.BEARISH),
+                "neutral": sum(1 for s in market_sigs if s.direction == Direction.NEUTRAL)
+            }
+        }
+    
+    # Get conflicts across group
+    group_conflicts = []
+    for market in markets_in_group:
+        market_conflicts = get_conflicts_for_market(market)
+        group_conflicts.extend(market_conflicts)
+    
+    return {
+        "group": group.lower(),
+        "markets": markets_in_group,
+        "total_markets": len(markets_in_group),
+        "total_signals": len(group_signals),
+        "direction_breakdown": direction_counts,
+        "confidence_breakdown": confidence_counts,
+        "pillar_breakdown": pillar_counts,
+        "markets_summary": signals_by_market,
+        "conflicts": [c.model_dump() for c in group_conflicts],
+        "conflict_count": len(group_conflicts)
+    }
 
 @router.get("/categories")
 def get_categories():
