@@ -202,3 +202,31 @@ class Event(BaseModel):
     description: str = Field(..., description="Description of the event")
     impact_markets: List[str] = Field(default_factory=list, description="Markets impacted by this event")
     related_signal_ids: List[str] = Field(default_factory=list, description="Signal IDs related to this event")
+
+class Watchlist(BaseModel):
+    """User watchlist for signals and markets."""
+    watchlist_id: str = Field(..., description="Unique identifier for the watchlist")
+    name: str = Field(..., description="Watchlist name")
+    signal_ids: List[str] = Field(default_factory=list, description="List of signal IDs in this watchlist")
+    market_ids: List[str] = Field(default_factory=list, description="List of market names in this watchlist")
+    created_at: date = Field(default_factory=date.today, description="Date watchlist was created")
+    updated_at: date = Field(default_factory=date.today, description="Date watchlist was last updated")
+
+class AlertType(str, Enum):
+    """Types of alerts."""
+    DIRECTION_CHANGE = "direction_change"
+    CONFIDENCE_CHANGE = "confidence_change"
+    NEW_CONFLICT = "new_conflict"
+    REGIME_TRANSITION = "regime_transition"
+    STALE_SIGNAL = "stale_signal"
+
+class Alert(BaseModel):
+    """Alert configuration."""
+    alert_id: str = Field(..., description="Unique identifier for the alert")
+    alert_type: AlertType = Field(..., description="Type of alert")
+    name: str = Field(..., description="Alert name")
+    description: str = Field(..., description="Alert description")
+    conditions: Dict = Field(..., description="Alert conditions (type-specific)")
+    enabled: bool = Field(default=True, description="Whether alert is enabled")
+    created_at: date = Field(default_factory=date.today, description="Date alert was created")
+    last_triggered: Optional[date] = Field(None, description="Date alert was last triggered")

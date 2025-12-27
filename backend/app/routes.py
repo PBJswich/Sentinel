@@ -1,7 +1,11 @@
 from typing import Optional, List, Dict
 from datetime import date, timedelta
 from fastapi import APIRouter, Query, HTTPException
-from .models import Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType, Conflict, SignalSnapshot, Regime, Event, EventType
+from .models import (
+    Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType,
+    Conflict, SignalSnapshot, Regime, Event, EventType, Watchlist, Alert, AlertType,
+    ValidityWindow, SignalType
+)
 from .signal_loader import get_all_signals, reload_signals
 from .conflict_detector import get_all_conflicts, get_conflicts_for_market
 from .registry import get_signal_relationships
@@ -27,6 +31,21 @@ from .event_registry import (
     get_events_for_market,
     link_event_to_signal
 )
+from .watchlist_storage import (
+    create_watchlist,
+    get_watchlist,
+    get_all_watchlists,
+    update_watchlist,
+    delete_watchlist
+)
+from .alert_storage import (
+    create_alert,
+    get_alert,
+    get_all_alerts,
+    update_alert,
+    delete_alert,
+    evaluate_all_alerts
+)
 
 router = APIRouter()
 
@@ -37,8 +56,18 @@ def _get_all_signals():
     """Returns all signals loaded from JSON file with hot-reload support."""
     return get_all_signals()
 
-def _filter_signals(signals: list[Signal], market: Optional[str] = None, category: Optional[str] = None) -> list[Signal]:
-    """Filter signals by market and/or category (case-insensitive)."""
+def _filter_signals(
+    signals: list[Signal],
+    market: Optional[str] = None,
+    category: Optional[str] = None,
+    direction: Optional[str] = None,
+    confidence: Optional[str] = None,
+    validity_window: Optional[str] = None,
+    signal_type: Optional[str] = None,
+    freshness: Optional[str] = None,
+    search: Optional[str] = None
+) -> list[Signal]:
+    """Filter signals by various criteria (case-insensitive)."""
     filtered = signals
     
     if market:
@@ -49,7 +78,73 @@ def _filter_signals(signals: list[Signal], market: Optional[str] = None, categor
         category_lower = category.lower().strip()
         filtered = [s for s in filtered if s.category.lower() == category_lower]
     
+    if direction:
+        try:
+            direction_enum = Direction[direction.upper()]
+            filtered = [s for s in filtered if s.direction == direction_enum]
+        except KeyError:
+            filtered = []
+    
+    if confidence:
+        try:
+            confidence_enum = Confidence[confidence.upper()]
+            filtered = [s for s in filtered if s.confidence == confidence_enum]
+        except KeyError:
+            filtered = []
+    
+    if validity_window:
+        try:
+            window_enum = ValidityWindow[validity_window.upper()]
+            filtered = [s for s in filtered if s.validity_window == window_enum]
+        except KeyError:
+            filtered = []
+    
+    if signal_type:
+        try:
+            type_enum = SignalType[signal_type.upper()]
+            filtered = [s for s in filtered if s.signal_type == type_enum]
+        except KeyError:
+            filtered = []
+    
+    if freshness:
+        if freshness.lower() == "fresh":
+            filtered = [s for s in filtered if s.data_freshness.value == "fresh"]
+        elif freshness.lower() == "stale":
+            filtered = [s for s in filtered if s.data_freshness.value == "stale"]
+        elif freshness.lower() == "unknown":
+            filtered = [s for s in filtered if s.data_freshness.value == "unknown"]
+    
+    if search:
+        search_lower = search.lower().strip()
+        filtered = [
+            s for s in filtered
+            if search_lower in s.explanation.lower()
+            or search_lower in s.definition.lower()
+            or search_lower in s.name.lower()
+            or search_lower in s.market.lower()
+        ]
+    
     return filtered
+
+def _sort_signals(signals: list[Signal], sort_by: Optional[str] = None) -> list[Signal]:
+    """Sort signals by specified criteria."""
+    if not sort_by:
+        return signals
+    
+    sort_lower = sort_by.lower()
+    
+    if sort_lower == "confidence":
+        # Sort by confidence (High > Medium > Low)
+        confidence_order = {Confidence.HIGH: 3, Confidence.MEDIUM: 2, Confidence.LOW: 1}
+        return sorted(signals, key=lambda s: confidence_order.get(s.confidence, 0), reverse=True)
+    elif sort_lower == "date" or sort_lower == "last_updated":
+        return sorted(signals, key=lambda s: s.last_updated, reverse=True)
+    elif sort_lower == "market":
+        return sorted(signals, key=lambda s: s.market.lower())
+    elif sort_lower == "age":
+        return sorted(signals, key=lambda s: s.age_days, reverse=True)
+    else:
+        return signals
 
 def _get_stale_warnings(signals: list[Signal]) -> Optional[List[Dict]]:
     """Get stale signal warnings for a list of signals."""
@@ -70,14 +165,28 @@ def _get_stale_warnings(signals: list[Signal]) -> Optional[List[Dict]]:
 def get_signals(
     market: Optional[str] = Query(None, description="Filter by market name (case-insensitive)"),
     category: Optional[str] = Query(None, description="Filter by category (case-insensitive)"),
+    direction: Optional[str] = Query(None, description="Filter by direction (bullish/bearish/neutral)"),
+    confidence: Optional[str] = Query(None, description="Filter by confidence (low/medium/high)"),
+    validity_window: Optional[str] = Query(None, description="Filter by validity window (intraday/daily/weekly/structural)"),
+    signal_type: Optional[str] = Query(None, description="Filter by signal type (structural/tactical)"),
+    freshness: Optional[str] = Query(None, description="Filter by freshness (fresh/stale/unknown)"),
+    search: Optional[str] = Query(None, description="Full-text search in explanation, definition, name, market"),
+    sort_by: Optional[str] = Query(None, description="Sort by (confidence/date/market/age)"),
     limit: Optional[int] = Query(None, ge=1, description="Maximum number of signals to return"),
     offset: Optional[int] = Query(None, ge=0, description="Number of signals to skip")
 ):
     """
-    Get signals with optional filtering by market and/or category.
+    Get signals with optional filtering, searching, and sorting.
     
-    - **market**: Filter by market name (case-insensitive, e.g., "wti crude oil", "Gold")
-    - **category**: Filter by category (case-insensitive, e.g., "technical", "Macro", "Fundamental", "Sentiment")
+    - **market**: Filter by market name (case-insensitive)
+    - **category**: Filter by category (case-insensitive)
+    - **direction**: Filter by direction (bullish/bearish/neutral)
+    - **confidence**: Filter by confidence (low/medium/high)
+    - **validity_window**: Filter by validity window (intraday/daily/weekly/structural)
+    - **signal_type**: Filter by signal type (structural/tactical)
+    - **freshness**: Filter by freshness (fresh/stale/unknown)
+    - **search**: Full-text search in explanation, definition, name, market
+    - **sort_by**: Sort by (confidence/date/market/age)
     - **limit**: Maximum number of signals to return (pagination)
     - **offset**: Number of signals to skip (pagination)
     
@@ -86,9 +195,22 @@ def get_signals(
     all_signals = _get_all_signals()
     total = len(all_signals)
     
-    # Apply filters (case-insensitive)
-    filtered_signals = _filter_signals(all_signals, market, category)
+    # Apply filters
+    filtered_signals = _filter_signals(
+        all_signals,
+        market=market,
+        category=category,
+        direction=direction,
+        confidence=confidence,
+        validity_window=validity_window,
+        signal_type=signal_type,
+        freshness=freshness,
+        search=search
+    )
     filtered_count = len(filtered_signals)
+    
+    # Apply sorting
+    filtered_signals = _sort_signals(filtered_signals, sort_by)
     
     # Apply pagination
     if offset is not None:
@@ -111,14 +233,20 @@ def get_signals(
 def get_signals_by_market(
     market: str,
     category: Optional[str] = Query(None, description="Optional category filter (case-insensitive)"),
+    direction: Optional[str] = Query(None, description="Filter by direction (bullish/bearish/neutral)"),
+    confidence: Optional[str] = Query(None, description="Filter by confidence (low/medium/high)"),
+    sort_by: Optional[str] = Query(None, description="Sort by (confidence/date/age)"),
     limit: Optional[int] = Query(None, ge=1, description="Maximum number of signals to return"),
     offset: Optional[int] = Query(None, ge=0, description="Number of signals to skip")
 ):
     """
-    Get signals for a specific market.
+    Get signals for a specific market with optional filtering and sorting.
     
     - **market**: Market name (case-insensitive, e.g., "wti crude oil", "Gold")
     - **category**: Optional category filter (case-insensitive)
+    - **direction**: Filter by direction (bullish/bearish/neutral)
+    - **confidence**: Filter by confidence (low/medium/high)
+    - **sort_by**: Sort by (confidence/date/age)
     - **limit**: Maximum number of signals to return (pagination)
     - **offset**: Number of signals to skip (pagination)
     
@@ -127,9 +255,18 @@ def get_signals_by_market(
     all_signals = _get_all_signals()
     total = len(all_signals)
     
-    # Filter by market (case-insensitive) and optional category
-    filtered_signals = _filter_signals(all_signals, market, category)
+    # Filter by market (case-insensitive) and optional filters
+    filtered_signals = _filter_signals(
+        all_signals,
+        market=market,
+        category=category,
+        direction=direction,
+        confidence=confidence
+    )
     filtered_count = len(filtered_signals)
+    
+    # Apply sorting
+    filtered_signals = _sort_signals(filtered_signals, sort_by)
     
     # Apply pagination
     if offset is not None:
@@ -1176,6 +1313,147 @@ def get_event_impact(event_id: str):
                 "changes": changes_after
             }
         }
+    }
+
+@router.get("/watchlists")
+def get_watchlists():
+    """Get all watchlists."""
+    watchlists = get_all_watchlists()
+    return {
+        "total_watchlists": len(watchlists),
+        "watchlists": [w.model_dump() for w in watchlists]
+    }
+
+@router.get("/watchlists/{watchlist_id}")
+def get_watchlist_endpoint(watchlist_id: str):
+    """Get a specific watchlist by ID."""
+    watchlist = get_watchlist(watchlist_id)
+    if not watchlist:
+        raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
+    return {"watchlist": watchlist.model_dump()}
+
+@router.get("/watchlists/{watchlist_id}/signals")
+def get_watchlist_signals(watchlist_id: str):
+    """Get signals for a specific watchlist."""
+    watchlist = get_watchlist(watchlist_id)
+    if not watchlist:
+        raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
+    
+    all_signals = _get_all_signals()
+    signal_map = {s.signal_id: s for s in all_signals}
+    
+    # Get signals by ID
+    signals_by_id = [signal_map[sid] for sid in watchlist.signal_ids if sid in signal_map]
+    
+    # Get signals by market
+    signals_by_market = [s for s in all_signals if s.market in watchlist.market_ids]
+    
+    # Combine and deduplicate
+    all_watchlist_signals = {s.signal_id: s for s in signals_by_id + signals_by_market}
+    
+    return {
+        "watchlist_id": watchlist_id,
+        "watchlist_name": watchlist.name,
+        "total_signals": len(all_watchlist_signals),
+        "signals": [s.model_dump() for s in all_watchlist_signals.values()]
+    }
+
+@router.post("/watchlists")
+def create_watchlist_endpoint(watchlist: Watchlist):
+    """Create a new watchlist."""
+    created = create_watchlist(watchlist)
+    return {
+        "message": "Watchlist created successfully",
+        "watchlist": created.model_dump()
+    }
+
+@router.put("/watchlists/{watchlist_id}")
+def update_watchlist_endpoint(watchlist_id: str, watchlist: Watchlist):
+    """Update an existing watchlist."""
+    if watchlist_id != watchlist.watchlist_id:
+        raise HTTPException(status_code=400, detail="watchlist_id in path must match watchlist_id in body")
+    
+    updated = update_watchlist(watchlist_id, watchlist)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
+    
+    return {
+        "message": "Watchlist updated successfully",
+        "watchlist": updated.model_dump()
+    }
+
+@router.delete("/watchlists/{watchlist_id}")
+def delete_watchlist_endpoint(watchlist_id: str):
+    """Delete a watchlist."""
+    deleted = delete_watchlist(watchlist_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
+    
+    return {
+        "message": "Watchlist deleted successfully",
+        "watchlist_id": watchlist_id
+    }
+
+@router.get("/alerts")
+def get_alerts():
+    """Get all alerts."""
+    alerts = get_all_alerts()
+    return {
+        "total_alerts": len(alerts),
+        "alerts": [a.model_dump() for a in alerts]
+    }
+
+@router.get("/alerts/{alert_id}")
+def get_alert_endpoint(alert_id: str):
+    """Get a specific alert by ID."""
+    alert = get_alert(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found")
+    return {"alert": alert.model_dump()}
+
+@router.get("/alerts/active")
+def get_active_alerts():
+    """Evaluate all alerts and return currently triggered ones."""
+    triggered = evaluate_all_alerts()
+    return {
+        "total_triggered": len(triggered),
+        "triggered_alerts": triggered
+    }
+
+@router.post("/alerts")
+def create_alert_endpoint(alert: Alert):
+    """Create a new alert."""
+    created = create_alert(alert)
+    return {
+        "message": "Alert created successfully",
+        "alert": created.model_dump()
+    }
+
+@router.put("/alerts/{alert_id}")
+def update_alert_endpoint(alert_id: str, alert: Alert):
+    """Update an existing alert."""
+    if alert_id != alert.alert_id:
+        raise HTTPException(status_code=400, detail="alert_id in path must match alert_id in body")
+    
+    updated = update_alert(alert_id, alert)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found")
+    
+    return {
+        "message": "Alert updated successfully",
+        "alert": updated.model_dump()
+    }
+
+@router.delete("/alerts/{alert_id}")
+def delete_alert_endpoint(alert_id: str):
+    """Delete an alert."""
+    deleted = delete_alert(alert_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found")
+    
+    return {
+        "message": "Alert deleted successfully",
+        "alert_id": alert_id
     }
 
 @router.post("/signals/reload")
