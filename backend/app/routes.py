@@ -46,6 +46,9 @@ from .alert_storage import (
     delete_alert,
     evaluate_all_alerts
 )
+from .scoring import calculate_signal_score, get_score_breakdown
+from .audit_log import log_change, get_audit_log, get_changes_for_entity, ChangeType
+from .system_health import check_system_health, check_data_quality
 
 router = APIRouter()
 
@@ -690,11 +693,15 @@ def explain_signals(
                         "data_asof": str(s.data_asof),
                         "days_old": (s.last_updated - s.data_asof).days
                     },
+                    "score": s.score if s.score is not None else calculate_signal_score(s),
+                    "score_breakdown": get_score_breakdown(s),
+                    "confidence_rationale": s.confidence_rationale,
+                    "why_this_signal": f"{s.key_driver}. {s.explanation}",
                     "related_events": [
                         {
                             "event_id": e.event_id,
                             "event_name": e.name,
-                            "event_date": str(e.date),
+                            "event_date": str(e.event_date),
                             "event_type": e.event_type.value
                         }
                         for e in get_all_events()
@@ -1456,6 +1463,151 @@ def delete_alert_endpoint(alert_id: str):
         "alert_id": alert_id
     }
 
+@router.get("/signals/{signal_id}/score")
+def get_signal_score_endpoint(signal_id: str, include_breakdown: bool = Query(True, description="Include score breakdown")):
+    """
+    Get score and breakdown for a specific signal.
+    
+    - **signal_id**: Signal ID
+    - **include_breakdown**: Whether to include detailed score breakdown
+    """
+    all_signals = _get_all_signals()
+    signal_map = {s.signal_id: s for s in all_signals}
+    
+    if signal_id not in signal_map:
+        raise HTTPException(status_code=404, detail=f"Signal {signal_id} not found")
+    
+    signal = signal_map[signal_id]
+    score = signal.score if signal.score is not None else calculate_signal_score(signal)
+    
+    response = {
+        "signal_id": signal_id,
+        "signal_name": signal.name,
+        "score": round(score, 3)
+    }
+    
+    if include_breakdown:
+        response["breakdown"] = get_score_breakdown(signal)
+    
+    return response
+
+@router.get("/signals/definitions")
+def get_signal_definitions():
+    """
+    Get signal definition library with all signal definitions, sources, and logic.
+    
+    Provides a comprehensive library of all signal definitions for reference.
+    """
+    all_signals = _get_all_signals()
+    
+    # Group by category
+    by_category = {}
+    for signal in all_signals:
+        category = signal.category
+        if category not in by_category:
+            by_category[category] = []
+        by_category[category].append({
+            "signal_id": signal.signal_id,
+            "name": signal.name,
+            "market": signal.market,
+            "definition": signal.definition,
+            "source": signal.source,
+            "validity_window": signal.validity_window.value,
+            "signal_type": signal.signal_type.value,
+            "decay_behavior": signal.decay_behavior,
+            "confidence_rationale": signal.confidence_rationale
+        })
+    
+    return {
+        "total_signals": len(all_signals),
+        "by_category": by_category,
+        "note": "This library provides definitions and logic for all signals. Scores are optional and never replace explanations."
+    }
+
+@router.get("/audit/log")
+def get_audit_log_endpoint(
+    entity_id: Optional[str] = Query(None, description="Filter by entity ID"),
+    entity_type: Optional[str] = Query(None, description="Filter by entity type (signal, regime, etc.)"),
+    change_type: Optional[str] = Query(None, description="Filter by change type"),
+    start_date: Optional[date] = Query(None, description="Start date filter (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="End date filter (YYYY-MM-DD)")
+):
+    """
+    Get audit log of all changes.
+    
+    Provides full traceability of what changed, when, and why.
+    
+    - **entity_id**: Filter by entity ID
+    - **entity_type**: Filter by entity type
+    - **change_type**: Filter by change type
+    - **start_date**: Filter by start date
+    - **end_date**: Filter by end date
+    """
+    change_type_enum = None
+    if change_type:
+        try:
+            change_type_enum = ChangeType[change_type.upper()]
+        except KeyError:
+            pass
+    
+    log_entries = get_audit_log(
+        entity_id=entity_id,
+        entity_type=entity_type,
+        change_type=change_type_enum,
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    return {
+        "total_entries": len(log_entries),
+        "entries": log_entries
+    }
+
+@router.get("/audit/log/{entity_type}/{entity_id}")
+def get_entity_audit_log(entity_type: str, entity_id: str):
+    """
+    Get audit log for a specific entity.
+    
+    - **entity_type**: Entity type (signal, regime, etc.)
+    - **entity_id**: Entity ID
+    """
+    entries = get_changes_for_entity(entity_id, entity_type)
+    
+    return {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "total_changes": len(entries),
+        "changes": entries
+    }
+
+@router.get("/health")
+def get_system_health():
+    """
+    Get system health status and metrics.
+    
+    Provides:
+    - Overall health status
+    - System metrics
+    - Data quality checks
+    - Warnings
+    """
+    health = check_system_health()
+    return health
+
+@router.get("/health/quality")
+def get_data_quality():
+    """
+    Get data quality validation results.
+    
+    Validates:
+    - No signal without explanation
+    - No hidden weighting
+    - No silent data substitution
+    - Conflicts are visible
+    """
+    quality = check_data_quality()
+    return quality
+
 @router.post("/signals/reload")
 def reload_signals_endpoint():
     """
@@ -1466,6 +1618,16 @@ def reload_signals_endpoint():
     the file modification time changes.
     """
     reloaded = reload_signals()
+    
+    # Log the reload
+    for signal in reloaded:
+        log_change(
+            change_type=ChangeType.SIGNAL_UPDATED,
+            entity_id=signal.signal_id,
+            entity_type="signal",
+            description=f"Signal reloaded from JSON file"
+        )
+    
     return {
         "message": "Signals reloaded successfully",
         "count": len(reloaded),

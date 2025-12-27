@@ -52,6 +52,8 @@ class Signal(BaseModel):
     related_signal_ids: List[str] = Field(default_factory=list, description="List of related signal IDs")
     related_markets: List[str] = Field(default_factory=list, description="List of markets this signal impacts")
     signal_type: SignalType = Field(..., description="Signal type: structural or tactical")
+    score: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Optional normalized score (-1 to +1, where +1 is most bullish, -1 is most bearish)")
+    confidence_rationale: Optional[str] = Field(None, description="Explanation of why this confidence level was assigned")
     
     @field_validator('explanation')
     @classmethod
