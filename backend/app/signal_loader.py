@@ -1,7 +1,8 @@
 """
 Signal loader with hot-reload support.
 
-Loads signals from JSON file and supports hot-reload for local development.
+Loads signals from JSON file (default) or database (optional).
+Supports hot-reload for local development.
 Simulates daily updates by calculating timestamps dynamically.
 """
 
@@ -12,6 +13,9 @@ from pathlib import Path
 from typing import List, Optional
 from .models import Signal, Direction, Confidence, ValidityWindow, SignalType
 from .registry import get_registry
+
+# Configuration: set to True to load from database instead of JSON
+USE_DATABASE = False
 
 # Cache for loaded signals and file modification time
 _cached_signals: Optional[List[Signal]] = None
@@ -76,18 +80,42 @@ def _load_signals_from_file() -> List[Signal]:
     
     return signals
 
-def get_all_signals(force_reload: bool = False) -> List[Signal]:
+def get_all_signals(force_reload: bool = False, use_database: Optional[bool] = None) -> List[Signal]:
     """
     Get all signals, with hot-reload support for local development.
     
     Args:
-        force_reload: If True, force reload from file regardless of cache.
+        force_reload: If True, force reload from file/database regardless of cache.
+        use_database: If True, load from database; if False, load from JSON; if None, use USE_DATABASE setting.
     
     Returns:
         List of Signal objects.
     """
     global _cached_signals, _cached_file_mtime
     
+    # Determine source
+    load_from_db = use_database if use_database is not None else USE_DATABASE
+    
+    if load_from_db:
+        # Load from database
+        try:
+            from .database import SessionLocal
+            from .db_service import get_all_signals_db
+            
+            db = SessionLocal()
+            try:
+                if force_reload or _cached_signals is None:
+                    _cached_signals = get_all_signals_db(db)
+                    _cached_file_mtime = 0  # Database doesn't have mtime
+                return _cached_signals
+            finally:
+                db.close()
+        except Exception as e:
+            # Fallback to JSON if database fails
+            print(f"Warning: Failed to load from database: {e}. Falling back to JSON.")
+            load_from_db = False
+    
+    # Load from JSON file
     signals_file = _get_signals_file_path()
     
     # Check if file exists and get modification time

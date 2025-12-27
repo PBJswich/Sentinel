@@ -53,15 +53,28 @@ from .system_health import check_system_health, check_data_quality
 from .database import get_db
 from .db_service import save_signal as save_signal_db, get_all_signals_db, get_signal_by_id_db
 from .cache import cache_result, clear_cache, get_cache_stats
+from .saved_views import (
+    create_view,
+    get_view,
+    get_all_views,
+    update_view,
+    delete_view,
+    SavedView
+)
 
 router = APIRouter()
 
 # Initialize snapshots on module load
 initialize_snapshots()
 
-def _get_all_signals():
-    """Returns all signals loaded from JSON file with hot-reload support."""
-    return get_all_signals()
+def _get_all_signals(use_database: Optional[bool] = None):
+    """
+    Returns all signals loaded from JSON file (default) or database (optional) with hot-reload support.
+    
+    Args:
+        use_database: If True, load from database; if False, load from JSON; if None, use default setting.
+    """
+    return get_all_signals(use_database=use_database)
 
 def _filter_signals(
     signals: list[Signal],
@@ -179,6 +192,7 @@ def get_signals(
     freshness: Optional[str] = Query(None, description="Filter by freshness (fresh/stale/unknown)"),
     search: Optional[str] = Query(None, description="Full-text search in explanation, definition, name, market"),
     sort_by: Optional[str] = Query(None, description="Sort by (confidence/date/market/age)"),
+    include_scores: bool = Query(True, description="Include scores in response (can be toggled off)"),
     limit: Optional[int] = Query(None, ge=1, description="Maximum number of signals to return"),
     offset: Optional[int] = Query(None, ge=0, description="Number of signals to skip")
 ):
@@ -227,6 +241,17 @@ def get_signals(
     
     stale_warnings = _get_stale_warnings(filtered_signals)
     
+    # Conditionally remove scores if include_scores is False
+    if not include_scores:
+        signals_without_scores = []
+        for signal in filtered_signals:
+            # Create a copy without score field
+            signal_dict = signal.model_dump(exclude={'score'})
+            signal_copy = Signal(**signal_dict)
+            signal_copy.score = None
+            signals_without_scores.append(signal_copy)
+        filtered_signals = signals_without_scores
+    
     return SignalsResponse(
         signals=filtered_signals,
         total=total,
@@ -243,6 +268,7 @@ def get_signals_by_market(
     direction: Optional[str] = Query(None, description="Filter by direction (bullish/bearish/neutral)"),
     confidence: Optional[str] = Query(None, description="Filter by confidence (low/medium/high)"),
     sort_by: Optional[str] = Query(None, description="Sort by (confidence/date/age)"),
+    include_scores: bool = Query(True, description="Include scores in response (can be toggled off)"),
     limit: Optional[int] = Query(None, ge=1, description="Maximum number of signals to return"),
     offset: Optional[int] = Query(None, ge=0, description="Number of signals to skip")
 ):
@@ -282,6 +308,16 @@ def get_signals_by_market(
         filtered_signals = filtered_signals[:limit]
     
     stale_warnings = _get_stale_warnings(filtered_signals)
+    
+    # Conditionally remove scores if include_scores is False
+    if not include_scores:
+        signals_without_scores = []
+        for signal in filtered_signals:
+            signal_dict = signal.model_dump(exclude={'score'})
+            signal_copy = Signal(**signal_dict)
+            signal_copy.score = None
+            signals_without_scores.append(signal_copy)
+        filtered_signals = signals_without_scores
     
     return SignalsResponse(
         signals=filtered_signals,
@@ -1717,32 +1753,36 @@ def delete_signal_endpoint(signal_id: str, db: Session = Depends(get_db)):
     }
 
 @router.post("/signals/reload")
-def reload_signals_endpoint():
+def reload_signals_endpoint(use_database: bool = Query(False, description="Reload from database instead of JSON file")):
     """
-    Force reload signals from JSON file.
+    Force reload signals from JSON file or database.
     
     Useful for local development to reload signals after editing the JSON file
-    without restarting the server. Hot-reload also happens automatically when
+    or database without restarting the server. Hot-reload also happens automatically when
     the file modification time changes.
+    
+    - **use_database**: If True, reload from database; if False, reload from JSON file
     """
-    reloaded = reload_signals()
+    reloaded = get_all_signals(force_reload=True, use_database=use_database)
     
     # Log the reload
+    source = "database" if use_database else "JSON file"
     for signal in reloaded:
         log_change(
             change_type=ChangeType.SIGNAL_UPDATED,
             entity_id=signal.signal_id,
             entity_type="signal",
-            description=f"Signal reloaded from JSON file"
+            description=f"Signal reloaded from {source}"
         )
     
     # Clear cache
     clear_cache()
     
     return {
-        "message": "Signals reloaded successfully",
+        "message": f"Signals reloaded successfully from {source}",
         "count": len(reloaded),
-        "signals": [s.signal_id for s in reloaded]
+        "signals": [s.signal_id for s in reloaded],
+        "source": source
     }
 
 @router.get("/cache/stats")
@@ -1757,4 +1797,107 @@ def clear_cache_endpoint(pattern: Optional[str] = Query(None, description="Optio
     return {
         "message": "Cache cleared successfully",
         "pattern": pattern
+    }
+
+@router.get("/views")
+def get_saved_views():
+    """Get all saved views."""
+    views = get_all_views()
+    return {
+        "total_views": len(views),
+        "views": [v.model_dump() for v in views]
+    }
+
+@router.get("/views/{view_id}")
+def get_saved_view_endpoint(view_id: str):
+    """Get a specific saved view by ID."""
+    view = get_view(view_id)
+    if not view:
+        raise HTTPException(status_code=404, detail=f"View {view_id} not found")
+    return {"view": view.model_dump()}
+
+@router.get("/views/{view_id}/signals")
+def get_signals_with_view(view_id: str):
+    """
+    Get signals using a saved view's filters and sort configuration.
+    
+    Applies the saved view's filters and sort to the signals endpoint.
+    """
+    view = get_view(view_id)
+    if not view:
+        raise HTTPException(status_code=404, detail=f"View {view_id} not found")
+    
+    # Apply view's filters and sort
+    all_signals = _get_all_signals()
+    total = len(all_signals)
+    
+    filtered_signals = _filter_signals(
+        all_signals,
+        market=view.filters.get("market"),
+        category=view.filters.get("category"),
+        direction=view.filters.get("direction"),
+        confidence=view.filters.get("confidence"),
+        validity_window=view.filters.get("validity_window"),
+        signal_type=view.filters.get("signal_type"),
+        freshness=view.filters.get("freshness"),
+        search=view.filters.get("search")
+    )
+    filtered_count = len(filtered_signals)
+    
+    # Apply view's sort
+    filtered_signals = _sort_signals(filtered_signals, view.sort_by)
+    
+    # Apply pagination if specified in filters
+    limit = view.filters.get("limit")
+    offset = view.filters.get("offset")
+    if offset is not None:
+        filtered_signals = filtered_signals[offset:]
+    if limit is not None:
+        filtered_signals = filtered_signals[:limit]
+    
+    stale_warnings = _get_stale_warnings(filtered_signals)
+    
+    return SignalsResponse(
+        signals=filtered_signals,
+        total=total,
+        filtered_count=filtered_count,
+        limit=limit,
+        offset=offset,
+        stale_warnings=stale_warnings
+    )
+
+@router.post("/views")
+def create_saved_view_endpoint(view: SavedView):
+    """Create a new saved view."""
+    created = create_view(view)
+    return {
+        "message": "View created successfully",
+        "view": created.model_dump()
+    }
+
+@router.put("/views/{view_id}")
+def update_saved_view_endpoint(view_id: str, view: SavedView):
+    """Update an existing saved view."""
+    if view_id != view.view_id:
+        raise HTTPException(status_code=400, detail="view_id in path must match view_id in body")
+    
+    updated = update_view(view_id, view)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"View {view_id} not found")
+    
+    return {
+        "message": "View updated successfully",
+        "view": updated.model_dump()
+    }
+
+@router.delete("/views/{view_id}")
+def delete_saved_view_endpoint(view_id: str):
+    """Delete a saved view."""
+    deleted = delete_view(view_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"View {view_id} not found")
+    
+    return {
+        "message": "View deleted successfully",
+        "view_id": view_id
     }
