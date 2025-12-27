@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict
 from datetime import date, timedelta
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
+from sqlalchemy.orm import Session
 from .models import (
     Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType,
     Conflict, SignalSnapshot, Regime, Event, EventType, Watchlist, Alert, AlertType,
@@ -49,6 +50,9 @@ from .alert_storage import (
 from .scoring import calculate_signal_score, get_score_breakdown
 from .audit_log import log_change, get_audit_log, get_changes_for_entity, ChangeType
 from .system_health import check_system_health, check_data_quality
+from .database import get_db
+from .db_service import save_signal as save_signal_db, get_all_signals_db, get_signal_by_id_db
+from .cache import cache_result, clear_cache, get_cache_stats
 
 router = APIRouter()
 
@@ -1608,6 +1612,110 @@ def get_data_quality():
     quality = check_data_quality()
     return quality
 
+@router.post("/signals")
+def create_signal_endpoint(signal: Signal, db: Session = Depends(get_db)):
+    """
+    Create a new signal.
+    
+    - **signal**: Signal data
+    """
+    # Save to database
+    db_signal = save_signal_db(db, signal)
+    
+    # Log the creation
+    log_change(
+        change_type=ChangeType.SIGNAL_CREATED,
+        entity_id=signal.signal_id,
+        entity_type="signal",
+        description=f"Signal {signal.signal_id} created",
+        new_value=signal.model_dump()
+    )
+    
+    # Clear cache
+    clear_cache("get_all_signals")
+    
+    return {
+        "message": "Signal created successfully",
+        "signal": signal.model_dump()
+    }
+
+@router.put("/signals/{signal_id}")
+def update_signal_endpoint(signal_id: str, signal: Signal, db: Session = Depends(get_db)):
+    """
+    Update an existing signal.
+    
+    - **signal_id**: Signal ID
+    - **signal**: Updated signal data
+    """
+    if signal_id != signal.signal_id:
+        raise HTTPException(status_code=400, detail="signal_id in path must match signal_id in body")
+    
+    # Get old value for audit log
+    old_signal = get_signal_by_id_db(db, signal_id)
+    old_value = old_signal.model_dump() if old_signal else None
+    
+    # Save to database
+    db_signal = save_signal_db(db, signal)
+    
+    # Log the update
+    log_change(
+        change_type=ChangeType.SIGNAL_UPDATED,
+        entity_id=signal.signal_id,
+        entity_type="signal",
+        description=f"Signal {signal.signal_id} updated",
+        old_value=old_value,
+        new_value=signal.model_dump()
+    )
+    
+    # Clear cache
+    clear_cache("get_all_signals")
+    
+    return {
+        "message": "Signal updated successfully",
+        "signal": signal.model_dump()
+    }
+
+@router.delete("/signals/{signal_id}")
+def delete_signal_endpoint(signal_id: str, db: Session = Depends(get_db)):
+    """
+    Delete a signal.
+    
+    - **signal_id**: Signal ID
+    """
+    from .db_models import SignalDB
+    
+    db_signal = db.query(SignalDB).filter(SignalDB.signal_id == signal_id).first()
+    if not db_signal:
+        raise HTTPException(status_code=404, detail=f"Signal {signal_id} not found")
+    
+    # Get old value for audit log
+    old_value = {
+        "signal_id": db_signal.signal_id,
+        "name": db_signal.name,
+        "market": db_signal.market
+    }
+    
+    # Delete from database
+    db.delete(db_signal)
+    db.commit()
+    
+    # Log the deletion
+    log_change(
+        change_type=ChangeType.SIGNAL_DELETED,
+        entity_id=signal_id,
+        entity_type="signal",
+        description=f"Signal {signal_id} deleted",
+        old_value=old_value
+    )
+    
+    # Clear cache
+    clear_cache("get_all_signals")
+    
+    return {
+        "message": "Signal deleted successfully",
+        "signal_id": signal_id
+    }
+
 @router.post("/signals/reload")
 def reload_signals_endpoint():
     """
@@ -1628,8 +1736,25 @@ def reload_signals_endpoint():
             description=f"Signal reloaded from JSON file"
         )
     
+    # Clear cache
+    clear_cache()
+    
     return {
         "message": "Signals reloaded successfully",
         "count": len(reloaded),
         "signals": [s.signal_id for s in reloaded]
+    }
+
+@router.get("/cache/stats")
+def get_cache_stats_endpoint():
+    """Get cache statistics."""
+    return get_cache_stats()
+
+@router.post("/cache/clear")
+def clear_cache_endpoint(pattern: Optional[str] = Query(None, description="Optional pattern to match cache keys")):
+    """Clear cache entries."""
+    clear_cache(pattern)
+    return {
+        "message": "Cache cleared successfully",
+        "pattern": pattern
     }

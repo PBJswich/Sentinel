@@ -1,0 +1,40 @@
+"""
+Database connection and session management.
+
+Uses SQLite for MVP, can be switched to PostgreSQL for production.
+"""
+
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from pathlib import Path
+
+# SQLite database path
+BASE_DIR = Path(__file__).parent.parent.parent
+DATABASE_URL = f"sqlite:///{BASE_DIR / 'data' / 'sentinel.db'}"
+
+# Create engine
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},  # Needed for SQLite
+    echo=False  # Set to True for SQL query logging
+)
+
+# Session factory
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Base class for models
+Base = declarative_base()
+
+def get_db():
+    """Get database session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def init_db():
+    """Initialize database tables."""
+    Base.metadata.create_all(bind=engine)
+
