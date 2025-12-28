@@ -15,7 +15,9 @@ from .models import Signal, Direction, Confidence, ValidityWindow, SignalType
 from .registry import get_registry
 
 # Configuration: set to True to load from database instead of JSON
-USE_DATABASE = False
+import os
+USE_DATABASE = os.getenv("USE_DATABASE", "false").lower() == "true"
+USE_REAL_DATA = os.getenv("USE_REAL_DATA", "false").lower() == "true"
 
 # Cache for loaded signals and file modification time
 _cached_signals: Optional[List[Signal]] = None

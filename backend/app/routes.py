@@ -51,7 +51,7 @@ from .scoring import calculate_signal_score, get_score_breakdown
 from .audit_log import log_change, get_audit_log, get_changes_for_entity, ChangeType
 from .system_health import check_system_health, check_data_quality
 from .database import get_db
-from .db_service import save_signal as save_signal_db, get_all_signals_db, get_signal_by_id_db
+from .db_service import save_signal_db, get_all_signals_db, get_signal_by_id_db
 from .cache import cache_result, clear_cache, get_cache_stats
 from .saved_views import (
     create_view,
@@ -1901,3 +1901,63 @@ def delete_saved_view_endpoint(view_id: str):
         "message": "View deleted successfully",
         "view_id": view_id
     }
+
+@router.post("/pipeline/run")
+def run_pipeline_endpoint():
+    """
+    Manually trigger the data ingestion pipeline.
+    
+    Fetches data from all configured sources, validates, and stores signals.
+    """
+    from .pipeline.orchestrator import run_ingestion_pipeline
+    
+    result = run_ingestion_pipeline()
+    return result
+
+@router.post("/pipeline/ingest/technical")
+def ingest_technical_endpoint(symbols: Optional[List[str]] = Query(None, description="List of symbols to fetch (default: common commodities)")):
+    """
+    Ingest technical signals from Yahoo Finance.
+    
+    - **symbols**: Optional list of symbols (e.g., ["CL=F", "GC=F"]). Defaults to common commodities.
+    """
+    from .pipeline.orchestrator import PipelineOrchestrator
+    
+    orchestrator = PipelineOrchestrator()
+    result = orchestrator.ingest_technical_signals(symbols=symbols)
+    return result
+
+@router.post("/pipeline/ingest/macro")
+def ingest_macro_endpoint(series_ids: Optional[List[str]] = Query(None, description="List of FRED series IDs (default: DXY, 10Y yield)")):
+    """
+    Ingest macro signals from FRED API.
+    
+    - **series_ids**: Optional list of FRED series IDs. Defaults to DXY and 10Y yield.
+    Requires FRED_API_KEY environment variable.
+    """
+    from .pipeline.orchestrator import PipelineOrchestrator
+    
+    orchestrator = PipelineOrchestrator()
+    result = orchestrator.ingest_macro_signals(series_ids=series_ids)
+    return result
+
+@router.get("/pipeline/status")
+def get_pipeline_status():
+    """Get pipeline status and adapter availability."""
+    from .pipeline.orchestrator import PipelineOrchestrator
+    
+    orchestrator = PipelineOrchestrator()
+    
+    status = {
+        'adapters': {},
+        'last_runs': {}
+    }
+    
+    for name, adapter in orchestrator.adapters.items():
+        status['adapters'][name] = {
+            'available': True,
+            'last_fetch': str(adapter.get_last_update_time()) if adapter.get_last_update_time() else None,
+            'last_error': adapter.last_error
+        }
+    
+    return status

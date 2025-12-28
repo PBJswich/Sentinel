@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env file
+
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -20,6 +23,18 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 async def startup_event():
     """Initialize database on application startup."""
     init_db()
+    
+    # Optionally start schedulers if enabled
+    import os
+    if os.getenv("ENABLE_SCHEDULERS", "false").lower() == "true":
+        from .pipeline.schedulers import start_schedulers
+        start_schedulers()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on application shutdown."""
+    from .pipeline.schedulers import stop_schedulers
+    stop_schedulers()
 
 app.include_router(router)
 

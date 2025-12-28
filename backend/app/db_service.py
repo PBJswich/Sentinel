@@ -67,7 +67,7 @@ def db_to_signal(db_signal: SignalDB) -> Signal:
         confidence_rationale=db_signal.confidence_rationale
     )
 
-def save_signal(db: Session, signal: Signal) -> SignalDB:
+def save_signal_db(db: Session, signal: Signal) -> SignalDB:
     """Save or update a signal in the database."""
     db_signal = db.query(SignalDB).filter(SignalDB.signal_id == signal.signal_id).first()
     
