@@ -1,5 +1,6 @@
 from typing import Optional, List, Dict
 from datetime import date, timedelta
+from collections import defaultdict
 from fastapi import APIRouter, Query, HTTPException, Depends
 from sqlalchemy.orm import Session
 from .models import (
@@ -1961,3 +1962,324 @@ def get_pipeline_status():
         }
     
     return status
+
+
+
+@router.get("/intelligence/composite/{market}")
+def get_composite_signal(
+    market: str,
+    pillar_weights: Optional[str] = Query(None, description="JSON string with custom pillar weights (e.g., '{\"Macro\":0.4,\"Technical\":0.3}')")
+):
+    """
+    Get composite signal for a market.
+    
+    Composite signals combine signals across different pillars (categories) using weighted averages.
+    This provides a unified view of all signals for a market.
+    
+    - **market**: Market name (case-insensitive)
+    - **pillar_weights**: Optional custom weights for pillars (JSON string)
+    """
+    from .signal_analysis import calculate_composite_signal
+    import json
+    
+    all_signals = _get_all_signals()
+    market_signals = [s for s in all_signals if s.market.lower() == market.lower()]
+    
+    if not market_signals:
+        raise HTTPException(status_code=404, detail=f"No signals found for market '{market}'")
+    
+    # Parse custom weights if provided
+    weights = None
+    if pillar_weights:
+        try:
+            weights = json.loads(pillar_weights)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON format for pillar_weights")
+    
+    composite = calculate_composite_signal(market_signals, market, pillar_weights=weights)
+    
+    if composite is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient signals for composite calculation. Need signals from at least 2 different pillars."
+        )
+    
+    return composite
+
+
+@router.get("/intelligence/composite")
+def get_all_composite_signals(
+    min_pillars: int = Query(2, ge=2, description="Minimum number of pillars required")
+):
+    """
+    Get composite signals for all markets that have sufficient pillar coverage.
+    
+    - **min_pillars**: Minimum number of different pillars required (default: 2)
+    """
+    from .signal_analysis import calculate_composite_signal
+    
+    all_signals = _get_all_signals()
+    
+    # Group by market
+    by_market = defaultdict(list)
+    for signal in all_signals:
+        by_market[signal.market].append(signal)
+    
+    composites = []
+    for market, signals in by_market.items():
+        composite = calculate_composite_signal(
+            signals,
+            market,
+            min_signals_per_pillar=1
+        )
+        if composite and composite.get("pillar_count", 0) >= min_pillars:
+            composites.append(composite)
+    
+    return {
+        "composite_signals": composites,
+        "total_markets": len(composites),
+        "total_markets_analyzed": len(by_market)
+    }
+
+
+@router.get("/intelligence/correlation")
+def get_signal_correlation(
+    signal_id1: str = Query(..., description="First signal ID"),
+    signal_id2: str = Query(..., description="Second signal ID"),
+    include_historical: bool = Query(True, description="Include historical correlation analysis")
+):
+    """
+    Calculate correlation between two signals.
+    
+    Correlation is based on:
+    - Score alignment (how often they move together)
+    - Direction agreement
+    - Historical correlation (if snapshots available)
+    
+    - **signal_id1**: First signal ID
+    - **signal_id2**: Second signal ID
+    - **include_historical**: Whether to include historical correlation analysis
+    """
+    from .signal_analysis import calculate_signal_correlation
+    from .snapshot_storage import get_signal_history
+    
+    all_signals = _get_all_signals()
+    
+    signal1 = next((s for s in all_signals if s.signal_id == signal_id1), None)
+    signal2 = next((s for s in all_signals if s.signal_id == signal_id2), None)
+    
+    if not signal1:
+        raise HTTPException(status_code=404, detail=f"Signal '{signal_id1}' not found")
+    if not signal2:
+        raise HTTPException(status_code=404, detail=f"Signal '{signal_id2}' not found")
+    
+    # Get historical snapshots if requested
+    historical_snapshots = None
+    if include_historical:
+        try:
+            hist1 = get_signal_history(signal_id1)
+            hist2 = get_signal_history(signal_id2)
+            
+            # Match by date
+            hist1_dict = {snap.snapshot_date: snap.signal for snap in hist1}
+            hist2_dict = {snap.snapshot_date: snap.signal for snap in hist2}
+            
+            common_dates = set(hist1_dict.keys()) & set(hist2_dict.keys())
+            if common_dates:
+                historical_snapshots = [
+                    (date, hist1_dict[date], hist2_dict[date])
+                    for date in sorted(common_dates)
+                ]
+        except Exception:
+            # If historical data not available, continue without it
+            pass
+    
+    correlation = calculate_signal_correlation(signal1, signal2, historical_snapshots)
+    
+    return correlation
+
+
+@router.get("/intelligence/performance/{signal_id}")
+def get_signal_performance(
+    signal_id: str,
+    start_date: Optional[date] = Query(None, description="Start date for analysis"),
+    end_date: Optional[date] = Query(None, description="End date for analysis")
+):
+    """
+    Analyze signal performance over time.
+    
+    Provides backtesting metrics including:
+    - Signal accuracy (how often direction was correct)
+    - Signal persistence (how long signals lasted)
+    - Score vs outcome correlation
+    
+    - **signal_id**: Signal ID to analyze
+    - **start_date**: Optional start date for analysis period
+    - **end_date**: Optional end date for analysis period
+    """
+    from .signal_analysis import analyze_signal_performance
+    from .snapshot_storage import get_signal_history
+    
+    all_signals = _get_all_signals()
+    signal = next((s for s in all_signals if s.signal_id == signal_id), None)
+    
+    if not signal:
+        raise HTTPException(status_code=404, detail=f"Signal '{signal_id}' not found")
+    
+    # Get historical snapshots
+    try:
+        history = get_signal_history(signal_id, start_date=start_date, end_date=end_date)
+        historical_snapshots = [(snap.snapshot_date, snap.signal) for snap in history]
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not retrieve historical data: {str(e)}"
+        )
+    
+    # TODO: Price data would need to be integrated from data sources
+    # For now, we'll analyze without price validation
+    performance = analyze_signal_performance(signal_id, historical_snapshots, price_data=None)
+    
+    return performance
+
+
+@router.get("/intelligence/correlations")
+def get_all_correlations(
+    market: Optional[str] = Query(None, description="Filter by market"),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    min_correlation: float = Query(0.3, ge=-1.0, le=1.0, description="Minimum correlation score to include")
+):
+    """
+    Get correlation analysis for all signal pairs.
+    
+    Returns correlations between signals, optionally filtered by market or category.
+    
+    - **market**: Optional market filter
+    - **category**: Optional category filter
+    - **min_correlation**: Minimum absolute correlation to include (default: 0.3)
+    """
+    from .signal_analysis import calculate_signal_correlation
+    
+    all_signals = _get_all_signals()
+    
+    # Apply filters
+    filtered_signals = _filter_signals(all_signals, market, category)
+    
+    if len(filtered_signals) < 2:
+        return {
+            "correlations": [],
+            "total_pairs": 0,
+            "message": "Need at least 2 signals for correlation analysis"
+        }
+    
+    # Calculate correlations for all pairs
+    correlations = []
+    for i in range(len(filtered_signals)):
+        for j in range(i + 1, len(filtered_signals)):
+            sig1 = filtered_signals[i]
+            sig2 = filtered_signals[j]
+            
+            correlation = calculate_signal_correlation(sig1, sig2)
+            
+            if abs(correlation["correlation_score"]) >= min_correlation:
+                correlations.append(correlation)
+    
+    # Sort by absolute correlation
+    correlations.sort(key=lambda x: abs(x["correlation_score"]), reverse=True)
+    
+    return {
+        "correlations": correlations,
+        "total_pairs": len(correlations),
+        "total_signals_analyzed": len(filtered_signals)
+    }
+
+
+@router.get("/intelligence/predictive/{market}")
+def get_predictive_signal(market: str):
+    """
+    Get predictive signal for a market.
+    
+    Predictive signals use rule-based analysis to forecast likely direction changes
+    based on current signals, momentum, and pillar convergence/divergence.
+    
+    - **market**: Market name (case-insensitive)
+    """
+    from .signal_analysis import generate_predictive_signal
+    from .snapshot_storage import get_signal_history
+    
+    all_signals = _get_all_signals()
+    market_signals = [s for s in all_signals if s.market.lower() == market.lower()]
+    
+    if not market_signals:
+        raise HTTPException(status_code=404, detail=f"No signals found for market '{market}'")
+    
+    # Get historical trends (composite scores over time)
+    historical_trends = None
+    try:
+        # Get history for first signal to establish timeline
+        if market_signals:
+            signal_id = market_signals[0].signal_id
+            history = get_signal_history(signal_id)
+            
+            if history and len(history) >= 3:
+                # Build composite scores over time
+                from .signal_analysis import calculate_composite_signal
+                
+                # Group snapshots by date
+                by_date = defaultdict(list)
+                for snap in history:
+                    by_date[snap.snapshot_date].append(snap.signal)
+                
+                historical_trends = []
+                for date in sorted(by_date.keys()):
+                    signals_at_date = by_date[date]
+                    composite = calculate_composite_signal(signals_at_date, market)
+                    if composite:
+                        historical_trends.append((date, composite["composite_score"]))
+    except Exception:
+        # If historical data not available, continue without it
+        pass
+    
+    predictive = generate_predictive_signal(market, market_signals, historical_trends)
+    
+    if predictive is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient data for predictive signal. Need signals from multiple pillars."
+        )
+    
+    return predictive
+
+
+@router.get("/intelligence/predictive")
+def get_all_predictive_signals(
+    min_pillars: int = Query(2, ge=2, description="Minimum number of pillars required")
+):
+    """
+    Get predictive signals for all markets with sufficient data.
+    
+    - **min_pillars**: Minimum number of different pillars required (default: 2)
+    """
+    from .signal_analysis import generate_predictive_signal, calculate_composite_signal
+    
+    all_signals = _get_all_signals()
+    
+    # Group by market
+    by_market = defaultdict(list)
+    for signal in all_signals:
+        by_market[signal.market].append(signal)
+    
+    predictive_signals = []
+    for market, signals in by_market.items():
+        # Check if we have enough pillars
+        composite = calculate_composite_signal(signals, market, min_signals_per_pillar=1)
+        if composite and composite.get("pillar_count", 0) >= min_pillars:
+            predictive = generate_predictive_signal(market, signals, historical_trends=None)
+            if predictive:
+                predictive_signals.append(predictive)
+    
+    return {
+        "predictive_signals": predictive_signals,
+        "total_markets": len(predictive_signals),
+        "total_markets_analyzed": len(by_market)
+    }
