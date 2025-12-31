@@ -214,6 +214,12 @@ class Watchlist(BaseModel):
     created_at: date = Field(default_factory=date.today, description="Date watchlist was created")
     updated_at: date = Field(default_factory=date.today, description="Date watchlist was last updated")
 
+class WatchlistCreate(BaseModel):
+    """Model for creating a new watchlist (without watchlist_id, created_at, updated_at)."""
+    name: str = Field(..., description="Watchlist name")
+    signal_ids: List[str] = Field(default_factory=list, description="List of signal IDs in this watchlist")
+    market_ids: List[str] = Field(default_factory=list, description="List of market names in this watchlist")
+
 class AlertType(str, Enum):
     """Types of alerts."""
     DIRECTION_CHANGE = "direction_change"

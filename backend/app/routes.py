@@ -5,7 +5,7 @@ from fastapi import APIRouter, Query, HTTPException, Depends
 from sqlalchemy.orm import Session
 from .models import (
     Signal, Direction, Confidence, SignalsResponse, SignalRelationship, RelationshipType,
-    Conflict, SignalSnapshot, Regime, Event, EventType, Watchlist, Alert, AlertType,
+    Conflict, SignalSnapshot, Regime, Event, EventType, Watchlist, WatchlistCreate, Alert, AlertType,
     ValidityWindow, SignalType
 )
 from .signal_loader import get_all_signals, reload_signals
@@ -242,8 +242,13 @@ def get_signals(
     
     stale_warnings = _get_stale_warnings(filtered_signals)
     
-    # Conditionally remove scores if include_scores is False
-    if not include_scores:
+    # Calculate scores for signals that don't have them
+    if include_scores:
+        for signal in filtered_signals:
+            if signal.score is None:
+                signal.score = calculate_signal_score(signal)
+    else:
+        # Remove scores if include_scores is False
         signals_without_scores = []
         for signal in filtered_signals:
             # Create a copy without score field
@@ -310,8 +315,13 @@ def get_signals_by_market(
     
     stale_warnings = _get_stale_warnings(filtered_signals)
     
-    # Conditionally remove scores if include_scores is False
-    if not include_scores:
+    # Calculate scores for signals that don't have them
+    if include_scores:
+        for signal in filtered_signals:
+            if signal.score is None:
+                signal.score = calculate_signal_score(signal)
+    else:
+        # Remove scores if include_scores is False
         signals_without_scores = []
         for signal in filtered_signals:
             signal_dict = signal.model_dump(exclude={'score'})
@@ -1407,8 +1417,21 @@ def get_watchlist_signals(watchlist_id: str):
     }
 
 @router.post("/watchlists")
-def create_watchlist_endpoint(watchlist: Watchlist):
+def create_watchlist_endpoint(watchlist_data: WatchlistCreate):
     """Create a new watchlist."""
+    import uuid
+    from datetime import date
+    
+    # Generate watchlist_id and set dates
+    watchlist_id = str(uuid.uuid4())
+    watchlist = Watchlist(
+        watchlist_id=watchlist_id,
+        name=watchlist_data.name,
+        signal_ids=watchlist_data.signal_ids,
+        market_ids=watchlist_data.market_ids,
+        created_at=date.today(),
+        updated_at=date.today()
+    )
     created = create_watchlist(watchlist)
     return {
         "message": "Watchlist created successfully",
