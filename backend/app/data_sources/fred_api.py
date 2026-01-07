@@ -210,6 +210,16 @@ class FREDAdapter(BaseDataSource):
             signal_type=SignalType.STRUCTURAL
         )
         signal.score = calculate_signal_score(signal)
+        
+        # Track lineage
+        from ..data_lineage import track_lineage
+        track_lineage(
+            entity_id=signal.signal_id,
+            entity_type="signal",
+            source="fred_api",
+            source_id=series_id,
+            transformation="trend_analysis"
+        )
         signals.append(signal)
         
         return signals

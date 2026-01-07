@@ -159,6 +159,16 @@ class YahooFinanceAdapter(BaseDataSource):
                 signal_type=SignalType.TACTICAL
             )
             rsi_signal.score = calculate_signal_score(rsi_signal)
+            
+            # Track lineage
+            from ..data_lineage import track_lineage
+            track_lineage(
+                entity_id=rsi_signal.signal_id,
+                entity_type="signal",
+                source="yahoo_finance",
+                source_id=symbol,
+                transformation="rsi_calculation"
+            )
             signals.append(rsi_signal)
         
         # MA Crossover Signal
@@ -198,6 +208,16 @@ class YahooFinanceAdapter(BaseDataSource):
                 signal_type=SignalType.TACTICAL
             )
             ma_signal.score = calculate_signal_score(ma_signal)
+            
+            # Track lineage
+            from ..data_lineage import track_lineage
+            track_lineage(
+                entity_id=ma_signal.signal_id,
+                entity_type="signal",
+                source="yahoo_finance",
+                source_id=symbol,
+                transformation="moving_average_crossover"
+            )
             signals.append(ma_signal)
         
         return signals

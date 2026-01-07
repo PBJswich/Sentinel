@@ -2306,3 +2306,101 @@ def get_all_predictive_signals(
         "total_markets": len(predictive_signals),
         "total_markets_analyzed": len(by_market)
     }
+
+
+# ============================================================================
+# Phase 4: Production Infrastructure Endpoints
+# ============================================================================
+
+@router.get("/monitoring/metrics")
+def get_monitoring_metrics(
+    since_minutes: int = Query(60, ge=1, le=1440, description="Time window in minutes")
+):
+    """
+    Get API monitoring metrics.
+    
+    - **since_minutes**: Time window for metrics (default: 60 minutes)
+    """
+    from .monitoring import get_metrics
+    return get_metrics(since_minutes=since_minutes)
+
+@router.get("/monitoring/endpoints")
+def get_endpoint_stats():
+    """Get statistics per endpoint."""
+    from .monitoring import get_endpoint_stats
+    return {"endpoints": get_endpoint_stats()}
+
+@router.get("/monitoring/errors")
+def get_recent_errors(
+    limit: int = Query(50, ge=1, le=500, description="Maximum number of errors to return")
+):
+    """Get recent error logs."""
+    from .monitoring import get_recent_errors
+    return {"errors": get_recent_errors(limit=limit)}
+
+@router.post("/auth/api-keys")
+def create_api_key(
+    user_id: str = Query(..., description="User identifier"),
+    permissions: Optional[str] = Query(None, description="Comma-separated permissions (e.g., 'read,write')"),
+    rate_limit: int = Query(100, ge=1, description="Rate limit (requests per minute)")
+):
+    """Create a new API key."""
+    from .auth import register_api_key
+    perm_list = [p.strip() for p in permissions.split(",")] if permissions else None
+    api_key = register_api_key(user_id, permissions=perm_list, rate_limit=rate_limit)
+    return {
+        "api_key": api_key,
+        "user_id": user_id,
+        "permissions": perm_list or ["read"],
+        "rate_limit": rate_limit,
+        "message": "Store this API key securely. It cannot be retrieved again."
+    }
+
+@router.get("/data-quality/summary")
+def get_data_quality_summary():
+    """Get overall data quality summary."""
+    from .data_quality import get_quality_summary
+    return get_quality_summary()
+
+@router.get("/data-quality/issues")
+def get_data_quality_issues(
+    limit: int = Query(50, ge=1, le=500, description="Maximum number of issues to return")
+):
+    """Get signals with quality issues."""
+    from .data_quality import get_quality_issues
+    return {"issues": get_quality_issues(limit=limit)}
+
+@router.get("/lineage/{entity_id}")
+def get_lineage_info(entity_id: str):
+    """Get data lineage information for an entity."""
+    from .data_lineage import get_lineage
+    lineage = get_lineage(entity_id)
+    if not lineage:
+        raise HTTPException(status_code=404, detail=f"Lineage not found for entity {entity_id}")
+    return lineage
+
+@router.get("/lineage/source/{source}")
+def get_lineage_by_source(source: str):
+    """Get all entities from a specific source."""
+    from .data_lineage import get_lineage_by_source
+    return {"entities": get_lineage_by_source(source)}
+
+@router.get("/lineage/summary")
+def get_lineage_summary():
+    """Get lineage summary statistics."""
+    from .data_lineage import get_lineage_summary
+    return get_lineage_summary()
+
+@router.get("/etl/history")
+def get_etl_history(
+    limit: int = Query(50, ge=1, le=500, description="Maximum number of runs to return")
+):
+    """Get ETL pipeline execution history."""
+    from .etl_pipeline import get_pipeline_history
+    return {"runs": get_pipeline_history(limit=limit)}
+
+@router.get("/etl/summary")
+def get_etl_summary():
+    """Get ETL pipeline summary statistics."""
+    from .etl_pipeline import get_pipeline_summary
+    return get_pipeline_summary()

@@ -159,6 +159,21 @@ class PipelineOrchestrator:
                 try:
                     save_signal_db(db, signal)
                     stored += 1
+                    
+                    # Track data lineage
+                    from ..data_lineage import track_lineage
+                    source = "yahoo_finance" if any(s.market in str(signal.signal_id) for s in signals) else "unknown"
+                    track_lineage(
+                        entity_id=signal.signal_id,
+                        entity_type="signal",
+                        source=source,
+                        source_id=getattr(signal, 'source_id', None),
+                        transformation="fetch_and_transform"
+                    )
+                    
+                    # Assess data quality
+                    from ..data_quality import assess_signal_quality
+                    assess_signal_quality(signal)
                 except Exception as e:
                     logger.error(f"Failed to store signal {signal.signal_id}: {e}")
             db.commit()

@@ -1,9 +1,12 @@
 """
 Signal loader with hot-reload support.
 
-Loads signals from JSON file (default) or database (optional).
+Loads signals from database (default) or JSON file (fallback).
 Supports hot-reload for local development.
 Simulates daily updates by calculating timestamps dynamically.
+
+By default, signals are loaded from the database. Set USE_DATABASE=false
+to load from JSON file instead.
 """
 
 import json
@@ -14,9 +17,9 @@ from typing import List, Optional
 from .models import Signal, Direction, Confidence, ValidityWindow, SignalType
 from .registry import get_registry
 
-# Configuration: set to True to load from database instead of JSON
+# Configuration: set to False to load from JSON file instead of database
 import os
-USE_DATABASE = os.getenv("USE_DATABASE", "false").lower() == "true"
+USE_DATABASE = os.getenv("USE_DATABASE", "true").lower() == "true"  # Default: use database
 USE_REAL_DATA = os.getenv("USE_REAL_DATA", "false").lower() == "true"
 
 # Cache for loaded signals and file modification time
@@ -114,7 +117,9 @@ def get_all_signals(force_reload: bool = False, use_database: Optional[bool] = N
                 db.close()
         except Exception as e:
             # Fallback to JSON if database fails
-            print(f"Warning: Failed to load from database: {e}. Falling back to JSON.")
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to load from database: {e}. Falling back to JSON.")
             load_from_db = False
     
     # Load from JSON file
